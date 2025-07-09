@@ -27,13 +27,12 @@ MAX_TEST_CIRCUITS = 100
 
 
 def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH):
-# B!: The target qubit of the CNOT gate can be replaced by accident by a rotation gate.
-# Fixed in S.J.'s version with while loop increment
     qubits = [cirq.LineQubit(i) for i in range(n_qubits)]
     circuit = cirq.Circuit()
     for _ in range(depth):
         layer = []
-        for i in range(n_qubits):
+        i = 0
+        while i < n_qubits: # changed to ensure two gates aren't applied to a qubit in one layer after CNOT
             op_type = np.random.choice(['rx', 'rz', 'cx'])
             if op_type == 'rx':
                 theta = np.random.uniform(0, 2*np.pi)
@@ -44,6 +43,7 @@ def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH
             elif op_type == 'cx' and i < len(qubits) - 1:
                 if np.random.rand() < 0.5:
                     layer.append(cirq.CNOT(qubits[i], qubits[i + 1]))
+                    i += 1
         circuit.append(layer)
     return circuit
 
