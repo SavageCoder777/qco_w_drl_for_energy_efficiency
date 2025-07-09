@@ -69,12 +69,15 @@ def load_dataset(path='dataset/', limit=None):
 
 def evaluate_circuit(circuit):
 # B!: The energy is calculated as (qubit # * gate depth * coefficient)
-# Fixed in S.J's version
+# verified
+
+# B!: qubit count calculation must be incorporated
+
     # Estimate depth as the number of non-empty moments (layers)
     depth = sum(1 for m in circuit if m.operations)
     # Count total number of gates
     gate_count = len([op for op in circuit.all_operations()])
-    energy = 12 * gate_count * 0.18
+    energy = 12 * depth * 0.18
     return {
         'depth': depth,
         'gate_count': gate_count,
