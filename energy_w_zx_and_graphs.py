@@ -27,6 +27,7 @@ MAX_TEST_CIRCUITS = 100
 
 
 def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH):
+# Verified
     qubits = [cirq.LineQubit(i) for i in range(n_qubits)]
     circuit = cirq.Circuit()
     for _ in range(depth):
