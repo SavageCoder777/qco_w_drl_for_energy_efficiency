@@ -69,7 +69,7 @@ def load_dataset(path='dataset/', limit=None):
 
 def evaluate_circuit(circuit):
 # Semantic error. The energy is calculated as (qubit # * gate depth * coefficient)
-# verified
+# Verified
 
 # B!: qubit count calculation must be incorporated
 
@@ -92,6 +92,7 @@ def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
 # Semantic error. The iterator through the circuit iterates by moments, but within 
 # the moment, the operators are chosen arbitrarily. The previous op is not the operation 
 # before the current op on the same qubit. See code_verification\apply_gate_cancellation.ipynb
+# TODO Debug this function
     new_ops = []
     prev_op = None
     for op in circuit.all_operations():
@@ -109,6 +110,7 @@ def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
 
 def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
 # Semantic error. Same issue as in apply_gate_cancellation.
+# TODO Debug this function
     new_ops = []
     pending = {}
 
