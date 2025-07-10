@@ -109,7 +109,7 @@ def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
     return cirq.Circuit(new_ops)
 
 def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
-# Semantic error. Same issue as in apply_gate_cancellation.
+# Semantic error. Same issue as in function apply_gate_cancellation().
 # TODO Debug this function
     new_ops = []
     pending = {}
@@ -168,6 +168,8 @@ def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
     return cirq.Circuit(new_ops)
 
 def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
+# Semantic error. The function does not check if the operations that commutes are on the same qubit
+# May also have other issues, see code_verification\apply_commutation.ipynb
     moments = list(circuit)
     new_moments = []
 
@@ -189,7 +191,7 @@ def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
             for idx2, op2 in enumerate(m2_ops):
                 if idx2 in swapped_m2_indices:
                     continue
-                if cirq.commutes(op1, op2, atol=1e-6):
+                if cirq.commutes(op1, op2, atol=1e-6): ### Checks only if operations commute and not if they are on the same qubit
                     to_move_to_m2.append(op1)
                     to_move_to_m1.append(op2)
                     swapped_m2_indices.add(idx2)
