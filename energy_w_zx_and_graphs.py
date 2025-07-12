@@ -11,6 +11,7 @@ import pyzx.simplify as simplify
 from fractions import Fraction
 from scipy.stats import sem  # for standard error
 import seaborn as sns  # for better scatter visuals
+from collections import defaultdict
 
 MAX_QUBITS = 12
 MAX_DEPTH = 50
@@ -69,103 +70,144 @@ def load_dataset(path='dataset/', limit=None):
 
 def evaluate_circuit(circuit):
 # Semantic error. The energy is calculated as (qubit # * gate depth * coefficient)
-# Verified
+# Verified 
 
 # B!: qubit count calculation must be incorporated
+# verified 
 
     # Estimate depth as the number of non-empty moments (layers)
     depth = sum(1 for m in circuit if m.operations)
     # Count total number of gates
     gate_count = len([op for op in circuit.all_operations()])
-    energy = 12 * depth * 0.18
+    qubit_count = circuit.num_qubits()
+    energy = qubit_count * depth * 0.18
     return {
         'depth': depth,
         'gate_count': gate_count,
-        'energy': energy
+        'energy': energy,
+        'qubit_count': qubit_count
     }
+
 
 # ------------------------
 # 3. GATE TRANSFORMATIONS
 # ------------------------
 
 def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
-# Semantic error. The iterator through the circuit iterates by moments, but within 
-# the moment, the operators are chosen arbitrarily. The previous op is not the operation 
-# before the current op on the same qubit. See code_verification\apply_gate_cancellation.ipynb
-# TODO Debug this function
-    new_ops = []
-    prev_op = None
-    for op in circuit.all_operations():
-        if prev_op and isinstance(op.gate, cirq.EigenGate) and isinstance(prev_op.gate, cirq.EigenGate):
-            if op.qubits == prev_op.qubits and type(op.gate) == type(prev_op.gate):
-                if np.isclose(op.gate.exponent + prev_op.gate.exponent, 0.0, atol=1e-2):
-                    prev_op = None
-                    continue
+    from collections import defaultdict
+
+    qubit_ops = defaultdict(list)
+    for moment_index, moment in enumerate(circuit):
+        for op in moment.operations:
+            for qubit in op.qubits:
+                qubit_ops[qubit].append((moment_index, op))
+
+    kept_ops = set()
+
+    for qubit, ops in qubit_ops.items():
+        prev_op = None
+        for idx, (moment_index, op) in enumerate(ops):
+            if (prev_op and isinstance(op.gate, cirq.EigenGate) and
+                isinstance(prev_op[1].gate, cirq.EigenGate) and
+                type(op.gate) == type(prev_op[1].gate) and
+                np.isclose(op.gate.exponent + prev_op[1].gate.exponent, 0.0, atol=1e-2)):
+                prev_op = None
+                continue
+            if prev_op:
+                kept_ops.add(prev_op[1])
+            prev_op = (moment_index, op)
         if prev_op:
-            new_ops.append(prev_op)
-        prev_op = op
-    if prev_op:
-        new_ops.append(prev_op)
-    return cirq.Circuit(new_ops)
+            kept_ops.add(prev_op[1])
+
+    new_circuit = cirq.Circuit()
+    for moment in circuit:
+        new_moment_ops = []
+        for op in moment.operations:
+            if op in kept_ops:
+                new_moment_ops.append(op)
+        new_circuit.append(cirq.Moment(new_moment_ops))
+
+    return new_circuit
 
 def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
-# Semantic error. Same issue as in function apply_gate_cancellation().
-# TODO Debug this function
-    new_ops = []
-    pending = {}
-
-    rx_gate_type = type(cirq.rx(0))
-    rz_gate_type = type(cirq.rz(0))
-
-    for op in circuit.all_operations():
-        if isinstance(op.gate, cirq.EigenGate) and len(op.qubits) == 1:
-            q = op.qubits[0]
-            gate_type = type(op.gate)
-            key = (q, gate_type)
-
-            if gate_type in [rx_gate_type, rz_gate_type]:
-                current_angle = op.gate._rads  # radians angle
-                if key in pending:
-                    old_op = pending[key]
-                    old_angle = old_op.gate._rads
-                    combined_angle = old_angle + current_angle
-                    if np.isclose(combined_angle, 0.0, atol=1e-6):
-                        del pending[key]
-                    else:
-                        if gate_type == rx_gate_type:
-                            new_gate = cirq.rx(combined_angle)
-                        else:
-                            new_gate = cirq.rz(combined_angle)
-                        pending[key] = new_gate.on(q)
-                else:
-                    pending[key] = op
-
-            elif hasattr(op.gate, 'exponent'):
-                current_exp = op.gate.exponent
-                if key in pending:
-                    old_op = pending[key]
-                    old_exp = old_op.gate.exponent
-                    combined_exp = old_exp + current_exp
-                    if np.isclose(combined_exp, 0.0, atol=1e-6):
-                        del pending[key]
-                    else:
-                        new_gate = old_op.gate.__class__(exponent=combined_exp)
-                        pending[key] = new_gate.on(q)
-                else:
-                    pending[key] = op
-
+    merged_ops_with_moments = []
+    pending_rotations = defaultdict(list)  # qubit -> list of (moment_idx, op)
+    
+    def flush(qubit, pending_list):
+        if not pending_list:
+            return
+        gate_type = type(pending_list[0][1].gate)
+        total_angle = sum(op.gate._rads for _, op in pending_list)
+        norm_angle = total_angle % (2 * np.pi)
+        if norm_angle > np.pi:
+            norm_angle -= 2 * np.pi
+        if not np.isclose(norm_angle, 0.0, atol=1e-6):
+            moment_idx = pending_list[0][0]
+            if gate_type == type(cirq.rx(0)):
+                merged_op = cirq.rx(norm_angle).on(qubit)
+            elif gate_type == type(cirq.ry(0)):
+                merged_op = cirq.ry(norm_angle).on(qubit)
+            elif gate_type == type(cirq.rz(0)):
+                merged_op = cirq.rz(norm_angle).on(qubit)
             else:
-                new_ops.extend(pending.values())
-                pending = {}
-                new_ops.append(op)
+                merged_op = pending_list[0][1]
+            merged_ops_with_moments.append((moment_idx, merged_op))
+        # else: effectively zero, skip
+        pending_list.clear()
 
-        else:
-            new_ops.extend(pending.values())
-            pending = {}
-            new_ops.append(op)
+    for moment_idx, moment in enumerate(circuit):
+        used_qubits = set()
 
-    new_ops.extend(pending.values())
-    return cirq.Circuit(new_ops)
+        for op in moment.operations:
+            qubits = op.qubits
+
+            # Multi-qubit op: flush all qubit buffers it's involved in
+            if len(qubits) > 1:
+                for q in qubits:
+                    flush(q, pending_rotations[q])
+                merged_ops_with_moments.append((moment_idx, op))
+                used_qubits.update(qubits)
+
+            else:  # single-qubit op
+                q = qubits[0]
+                gate = op.gate
+
+                # If it's a rotation gate (Rx, Ry, Rz)
+                if hasattr(gate, "_rads"):
+                    if pending_rotations[q]:
+                        last_gate = pending_rotations[q][-1][1].gate
+                        if type(last_gate) == type(gate):
+                            # Still consecutive of same type
+                            pending_rotations[q].append((moment_idx, op))
+                        else:
+                            flush(q, pending_rotations[q])
+                            pending_rotations[q].append((moment_idx, op))
+                    else:
+                        pending_rotations[q].append((moment_idx, op))
+                else:
+                    # Non-rotation gate -> flush before it
+                    flush(q, pending_rotations[q])
+                    merged_ops_with_moments.append((moment_idx, op))
+
+                used_qubits.add(q)
+
+        # For any qubit not touched this moment, flush its buffer
+        for q in pending_rotations:
+            if q not in used_qubits:
+                flush(q, pending_rotations[q])
+
+    # Flush any remaining at the end
+    for q in pending_rotations:
+        flush(q, pending_rotations[q])
+
+    # Group by moment
+    ops_by_moment = defaultdict(list)
+    for moment_idx, op in merged_ops_with_moments:
+        ops_by_moment[moment_idx].append(op)
+
+    max_moment = max(ops_by_moment.keys(), default=-1)
+    moments = [cirq.Moment(ops_by_moment.get(i, [])) for i in range(max_moment + 1)]
+    return cirq.Circuit(moments)
 
 def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
 # Verified and debugged. See code_verification\apply_commutation.ipynb for test cases.
@@ -454,7 +496,8 @@ class QuantumPruneEnv(gym.Env):
         depth_delta = before['depth'] - after['depth']
         gate_delta = before['gate_count'] - after['gate_count']
         energy_delta = before['energy'] - after['energy']
-        reward = depth_delta + 0.8 * gate_delta +  energy_delta
+        qubit_count_delta = before['qubit_count'] - after['qubit_count']
+        reward = depth_delta + 0.8 * gate_delta +  energy_delta + qubit_count_delta
         if after['gate_count'] == 0: reward = -1
         self.steps_taken += 1
         done = self.steps_taken >= self.max_steps
@@ -463,6 +506,7 @@ class QuantumPruneEnv(gym.Env):
         training_history['depth'].append(after['depth'])
         training_history['gate_count'].append(after['gate_count'])
         training_history['energy'].append(after['energy'])
+        training_history['qubit_count'].append(after['qubit_count'])
 
         return self._encode_circuit(), reward, done, False, {}
 
@@ -472,9 +516,10 @@ class QuantumPruneEnv(gym.Env):
             stats['depth'] / 100,
             stats['gate_count'] / 100,
             stats['energy'] / 100,
+            stats['qubit_count'] / 100,
             len(self.circuit) / 100,
             self.steps_taken / self.max_steps
-        ] + [0]*6, dtype=np.float32)
+        ] + [0]*5, dtype=np.float32)
 
 # ------------------------------
 # 5. EVALUATION + VISUALIZATION
@@ -509,7 +554,7 @@ def plot_depth_comparison(results):
     plt.savefig("energy_comparison.png")
     plt.close()
 
-def plot_rl_training_scatter(depths, gates, energies):
+def plot_rl_training_scatter(depths, gates, energies, qubit_counts):
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -533,6 +578,7 @@ def plot_rl_training_scatter(depths, gates, energies):
     plot_scatter(depths, "d", "train_depth_scatter.png")
     plot_scatter(gates, "n", "train_gate_scatter.png")
     plot_scatter(energies, "Energy", "train_energy_scatter.png")
+    plot_scatter(qubit_counts, "qubit count", "train_qubit_count_scatter.png")
 
 def plot_test_examples_5(test_logs, rounds, ylabel, filename):
     import matplotlib.pyplot as plt
@@ -580,6 +626,7 @@ def get_training_stats(model):
     depth_vals = []
     gate_vals = []
     energy_vals = []
+    qubit_count_vals = []
 
     env = BatchEnv(circuits)
     obs, _ = env.reset()
@@ -593,8 +640,9 @@ def get_training_stats(model):
             depth_vals.append((step, evals['depth']))
             gate_vals.append((step, evals['gate_count']))
             energy_vals.append((step, evals['energy']))
+            qubit_count_vals.append((step, evals['qubit_count']))
 
-    return depth_vals, gate_vals, energy_vals
+    return depth_vals, gate_vals, energy_vals, qubit_count_vals
 
 def plot_training_stats(stats, title, ylabel, filename):
     steps, values = zip(*stats)
@@ -701,17 +749,19 @@ if __name__ == '__main__':
     training_history = {
         'depth': [],
         'gate_count': [],
-        'energy': []
+        'energy': [],
+        'qubit_count': []
     }
     print("[3/4] Training PPO model (short run: 50k steps)...")
     vec_env = make_vec_env(lambda: BatchEnv(circuits), n_envs=4)
     model = PPO("MlpPolicy", vec_env, verbose=1)
     model.learn(total_timesteps=MAX_TRAIN_STEPS)
 
-    depths, gates, energies = get_training_stats(model)
+    depths, gates, energies, qubit_counts = get_training_stats(model)
     plot_training_stats(depths, "RL Training Progress (Depth)", "d", "train_depth.png")
     plot_training_stats(gates, "RL Training Progress (Gate Count)", "n", "train_gate.png")
     plot_training_stats(energies, "RL Training Progress (Energy)", "E", "train_energy.png")
+    plot_training_stats(qubit_counts, "RL Training Progress (Qubit Count)", "qubit count", "train_qubit_count.png")
 
     print("[4/4] Generating and evaluating test circuits...")
     generate_dataset(MAX_TEST_CIRCUITS, path='test_set/')
@@ -721,17 +771,26 @@ if __name__ == '__main__':
     plot_in_game_progress(eval_circuits, model, metric='depth', filename='test_depth.png')
     plot_in_game_progress(eval_circuits, model, metric='gate_count', filename='test_gate.png')
     plot_in_game_progress(eval_circuits, model, metric='energy', filename='test_energy.png')
+    plot_in_game_progress(eval_circuits, model, metric='qubit_count', filename='test_qubit_count.png')
 
     before_avg_depth = np.mean([r[0]['depth'] for r in results])
     after_avg_depth = np.mean([r[1]['depth'] for r in results])
     print(f"✔ Evaluation complete. Avg depth before: {before_avg_depth:.2f}, after: {after_avg_depth:.2f}")
+
+    before_avg_qubit_count = np.mean([r[0]['qubit_count'] for r in results])
+    after_avg_qubit_count = np.mean([r[1]['qubit_count'] for r in results])
+    print(f"✔ Evaluation complete. Avg qubit_count before: {before_avg_qubit_count:.2f}, after: {after_avg_qubit_count:.2f}")    
+
     before_avg_energy = np.mean([r[0]['energy'] for r in results])
     after_avg_energy = np.mean([r[1]['energy'] for r in results])
     print(f"✔ Evaluation complete. Avg energy before: {before_avg_energy:.2f}, after: {after_avg_energy:.2f}")
+
     print(f"Depth decreased by {(before_avg_depth - after_avg_depth) / before_avg_depth * 100:.2f}%")
+    print(f"Qubit count decreased by {(before_avg_qubit_count - after_avg_qubit_count) / before_avg_qubit_count * 100:.2f}%")
     print(f"Energy decreased by {(before_avg_energy - after_avg_energy) / before_avg_energy * 100:.2f}%")
     print("📊 Saving depth comparison plot to depth_comparison.png...")
 
-    plot_percent_scatter(results, 'depth', 'energy', "RL Agent (600 rounds)", "percent_change_rl.png")
+    plot_percent_scatter(results, 'depth', 'energy', "RL Agent (600 rounds)", "percent_change_energy_vs_depth_rl.png")
+    plot_percent_scatter(results, 'qubit_count', 'energy', "RL Agent (600 rounds)", "percent_change_energy_vs_qubit_count_rl.png")
     plot_depth_comparison(results)
     print("✅ All done!")
