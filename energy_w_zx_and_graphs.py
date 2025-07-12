@@ -11,6 +11,7 @@ import pyzx.simplify as simplify
 from fractions import Fraction
 from scipy.stats import sem  # for standard error
 import seaborn as sns  # for better scatter visuals
+from collections import defaultdict
 
 MAX_QUBITS = 12
 MAX_DEPTH = 50
@@ -93,83 +94,120 @@ def evaluate_circuit(circuit):
 # ------------------------
 
 def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
-# Semantic error. The iterator through the circuit iterates by moments, but within 
-# the moment, the operators are chosen arbitrarily. The previous op is not the operation 
-# before the current op on the same qubit. See code_verification\apply_gate_cancellation.ipynb
-# TODO Debug this function
-    new_ops = []
-    prev_op = None
-    for op in circuit.all_operations():
-        if prev_op and isinstance(op.gate, cirq.EigenGate) and isinstance(prev_op.gate, cirq.EigenGate):
-            if op.qubits == prev_op.qubits and type(op.gate) == type(prev_op.gate):
-                if np.isclose(op.gate.exponent + prev_op.gate.exponent, 0.0, atol=1e-2):
-                    prev_op = None
-                    continue
+    from collections import defaultdict
+
+    qubit_ops = defaultdict(list)
+    for moment_index, moment in enumerate(circuit):
+        for op in moment.operations:
+            for qubit in op.qubits:
+                qubit_ops[qubit].append((moment_index, op))
+
+    kept_ops = set()
+
+    for qubit, ops in qubit_ops.items():
+        prev_op = None
+        for idx, (moment_index, op) in enumerate(ops):
+            if (prev_op and isinstance(op.gate, cirq.EigenGate) and
+                isinstance(prev_op[1].gate, cirq.EigenGate) and
+                type(op.gate) == type(prev_op[1].gate) and
+                np.isclose(op.gate.exponent + prev_op[1].gate.exponent, 0.0, atol=1e-2)):
+                prev_op = None
+                continue
+            if prev_op:
+                kept_ops.add(prev_op[1])
+            prev_op = (moment_index, op)
         if prev_op:
-            new_ops.append(prev_op)
-        prev_op = op
-    if prev_op:
-        new_ops.append(prev_op)
-    return cirq.Circuit(new_ops)
+            kept_ops.add(prev_op[1])
+
+    new_circuit = cirq.Circuit()
+    for moment in circuit:
+        new_moment_ops = []
+        for op in moment.operations:
+            if op in kept_ops:
+                new_moment_ops.append(op)
+        new_circuit.append(cirq.Moment(new_moment_ops))
+
+    return new_circuit
 
 def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
-# Semantic error. Same issue as in apply_gate_cancellation.
-# TODO Debug this function
-    new_ops = []
-    pending = {}
-
-    rx_gate_type = type(cirq.rx(0))
-    rz_gate_type = type(cirq.rz(0))
-
-    for op in circuit.all_operations():
-        if isinstance(op.gate, cirq.EigenGate) and len(op.qubits) == 1:
-            q = op.qubits[0]
-            gate_type = type(op.gate)
-            key = (q, gate_type)
-
-            if gate_type in [rx_gate_type, rz_gate_type]:
-                current_angle = op.gate._rads  # radians angle
-                if key in pending:
-                    old_op = pending[key]
-                    old_angle = old_op.gate._rads
-                    combined_angle = old_angle + current_angle
-                    if np.isclose(combined_angle, 0.0, atol=1e-6):
-                        del pending[key]
-                    else:
-                        if gate_type == rx_gate_type:
-                            new_gate = cirq.rx(combined_angle)
-                        else:
-                            new_gate = cirq.rz(combined_angle)
-                        pending[key] = new_gate.on(q)
-                else:
-                    pending[key] = op
-
-            elif hasattr(op.gate, 'exponent'):
-                current_exp = op.gate.exponent
-                if key in pending:
-                    old_op = pending[key]
-                    old_exp = old_op.gate.exponent
-                    combined_exp = old_exp + current_exp
-                    if np.isclose(combined_exp, 0.0, atol=1e-6):
-                        del pending[key]
-                    else:
-                        new_gate = old_op.gate.__class__(exponent=combined_exp)
-                        pending[key] = new_gate.on(q)
-                else:
-                    pending[key] = op
-
+    merged_ops_with_moments = []
+    pending_rotations = defaultdict(list)  # qubit -> list of (moment_idx, op)
+    
+    def flush(qubit, pending_list):
+        if not pending_list:
+            return
+        gate_type = type(pending_list[0][1].gate)
+        total_angle = sum(op.gate._rads for _, op in pending_list)
+        norm_angle = total_angle % (2 * np.pi)
+        if norm_angle > np.pi:
+            norm_angle -= 2 * np.pi
+        if not np.isclose(norm_angle, 0.0, atol=1e-6):
+            moment_idx = pending_list[0][0]
+            if gate_type == type(cirq.rx(0)):
+                merged_op = cirq.rx(norm_angle).on(qubit)
+            elif gate_type == type(cirq.ry(0)):
+                merged_op = cirq.ry(norm_angle).on(qubit)
+            elif gate_type == type(cirq.rz(0)):
+                merged_op = cirq.rz(norm_angle).on(qubit)
             else:
-                new_ops.extend(pending.values())
-                pending = {}
-                new_ops.append(op)
+                merged_op = pending_list[0][1]
+            merged_ops_with_moments.append((moment_idx, merged_op))
+        # else: effectively zero, skip
+        pending_list.clear()
 
-        else:
-            new_ops.extend(pending.values())
-            pending = {}
-            new_ops.append(op)
+    for moment_idx, moment in enumerate(circuit):
+        used_qubits = set()
 
-    new_ops.extend(pending.values())
-    return cirq.Circuit(new_ops)
+        for op in moment.operations:
+            qubits = op.qubits
+
+            # Multi-qubit op: flush all qubit buffers it's involved in
+            if len(qubits) > 1:
+                for q in qubits:
+                    flush(q, pending_rotations[q])
+                merged_ops_with_moments.append((moment_idx, op))
+                used_qubits.update(qubits)
+
+            else:  # single-qubit op
+                q = qubits[0]
+                gate = op.gate
+
+                # If it's a rotation gate (Rx, Ry, Rz)
+                if hasattr(gate, "_rads"):
+                    if pending_rotations[q]:
+                        last_gate = pending_rotations[q][-1][1].gate
+                        if type(last_gate) == type(gate):
+                            # Still consecutive of same type
+                            pending_rotations[q].append((moment_idx, op))
+                        else:
+                            flush(q, pending_rotations[q])
+                            pending_rotations[q].append((moment_idx, op))
+                    else:
+                        pending_rotations[q].append((moment_idx, op))
+                else:
+                    # Non-rotation gate -> flush before it
+                    flush(q, pending_rotations[q])
+                    merged_ops_with_moments.append((moment_idx, op))
+
+                used_qubits.add(q)
+
+        # For any qubit not touched this moment, flush its buffer
+        for q in pending_rotations:
+            if q not in used_qubits:
+                flush(q, pending_rotations[q])
+
+    # Flush any remaining at the end
+    for q in pending_rotations:
+        flush(q, pending_rotations[q])
+
+    # Group by moment
+    ops_by_moment = defaultdict(list)
+    for moment_idx, op in merged_ops_with_moments:
+        ops_by_moment[moment_idx].append(op)
+
+    max_moment = max(ops_by_moment.keys(), default=-1)
+    moments = [cirq.Moment(ops_by_moment.get(i, [])) for i in range(max_moment + 1)]
+    return cirq.Circuit(moments)  
 
 def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
     moments = list(circuit)
