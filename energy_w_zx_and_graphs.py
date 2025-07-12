@@ -168,71 +168,129 @@ def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
     return cirq.Circuit(new_ops)
 
 def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
-# Semantic error. The function does not check if the operations that commutes are on the same qubit
-# May also have other issues, see code_verification\apply_commutation.ipynb
-# TODO Debug this function
+# Verified and debugged. See code_verification\apply_commutation.ipynb for test cases.
+    """
+    This function applies commutation by first applyings spacers around the CNOT gates, 
+    swapping the gates, then removing the identity spacers. The addition of Identity spacers
+    around the CNOT is because CNOT is a multi-qubit gate and may overlap with other single 
+    qubit gates. As a result, the swaps that occur may not be apparent because it was swapped 
+    with an Identity gate, which is later removed.
+    """
+    # Add spacers around CNOT gate
+    circuit = spacer_around_CNOT(circuit)
+
+    # swap/commutation
     moments = list(circuit)
-    new_moments = []
 
     i = 0
     while i < len(moments) - 1:
         m1, m2 = moments[i], moments[i + 1]
-        # Ops from each moment
         m1_ops = list(m1.operations)
         m2_ops = list(m2.operations)
 
-        # Ops to swap
         to_move_to_m2 = []
         to_move_to_m1 = []
 
-        # Track which ops in m2 have been swapped
-        swapped_m2_indices = set()
-
-        for idx1, op1 in enumerate(m1_ops):
-            for idx2, op2 in enumerate(m2_ops):
-                if idx2 in swapped_m2_indices:
-                    continue
-                if cirq.commutes(op1, op2, atol=1e-6): ### Checks only if operations commute and not if they are on the same qubit
+        for op1 in m1_ops:
+            for op2 in m2_ops:
+                if cirq.commutes(op1, op2, atol=1e-10) and (not set(op1.qubits).isdisjoint(op2.qubits)):
+                    print(f"Swapping {op1} and {op2}")
                     to_move_to_m2.append(op1)
                     to_move_to_m1.append(op2)
-                    swapped_m2_indices.add(idx2)
                     break
 
-        # Remaining ops after swapping
         new_m1_ops = [op for op in m1_ops if op not in to_move_to_m2] + to_move_to_m1
-        new_m2_ops = [op for idx, op in enumerate(m2_ops) if idx not in swapped_m2_indices] + to_move_to_m2
+        new_m2_ops = [op for op in m2_ops if op not in to_move_to_m1] + to_move_to_m2
 
-        # Check for overlapping ops in new moments and split if needed
-        def split_ops_into_moments(ops):
-            moments_list = []
-            used_qubits = set()
-            current_ops = []
-            for op in ops:
-                if any(q in used_qubits for q in op.qubits):
-                    moments_list.append(cirq.Moment(current_ops))
-                    current_ops = [op]
-                    used_qubits = set(op.qubits)
-                else:
-                    current_ops.append(op)
-                    used_qubits.update(op.qubits)
-            if current_ops:
-                moments_list.append(cirq.Moment(current_ops))
-            return moments_list
+        moments[i] = cirq.Moment(new_m1_ops)
+        moments[i + 1] = cirq.Moment(new_m2_ops)
 
-        # Split moments if needed to avoid overlap
-        new_m1_moments = split_ops_into_moments(new_m1_ops)
-        new_m2_moments = split_ops_into_moments(new_m2_ops)
+        i += 1
+    circuit = cirq.Circuit(moments)
 
-        # Add the new moments in place of m1 and m2
-        new_moments.extend(new_m1_moments)
-        new_moments.extend(new_m2_moments)
+    # remove the identity spacers
+    ops_in_order = []
 
-        i += 2
+    for moment in circuit:
+        for op in moment.operations:
+            if not isinstance(op.gate, cirq.IdentityGate):
+                ops_in_order.append(op)
+                
+    return cirq.Circuit(ops_in_order)
 
-    # If odd number of moments, append the last one
-    if i == len(moments) - 1:
-        new_moments.append(moments[-1])
+def spacer_around_CNOT(circuit: cirq.Circuit) -> cirq.Circuit:
+# Verified. See code_verification\apply_commutation.ipynb for test cases.
+    """
+    This function is a helper function for apply_commutation.
+    
+    This function first adds a identity gate around the CNOT gate along the target qubit to spread the 
+    CNOT gates apart from the rest. Then the identity gates are swapped in the direction away from the 
+    CNOT gates with a single qubit gate.
+    """
+    moments = list(circuit)
+    # spread
+    i = 0
+    while i < len(moments):
+        moment = moments[i]
+        cnot_ops = [op for op in moment.operations if isinstance(op.gate, cirq.CNotPowGate)]
+        for cnot in cnot_ops:
+            q0, q1 = cnot.qubits
+            if i > 0:
+                left = moments[i - 1]
+                if q0 in left.qubits and q1 in left.qubits:
+                    moments.insert(i, cirq.Moment([cirq.I(q1)]))
+                    i += 1
+                    break
+            if i + 1 < len(moments):
+                right = moments[i + 1]
+                if q0 in right.qubits and q1 in right.qubits:
+                    moments.insert(i + 1, cirq.Moment([cirq.I(q1)]))
+                    break
+        i += 1
+    
+    circuit = cirq.Circuit(moments)
 
+    # shift
+    new_moments = list(circuit)
+    num_moments = len(new_moments)
+
+    shifted_ids = set()  # (moment index, qubit tuple)
+
+    for i in range(num_moments):
+        moment = new_moments[i]
+        ops = list(moment.operations)
+
+        for op_idx, op in enumerate(ops):
+            if isinstance(op.gate, cirq.IdentityGate):
+                id_key = (i, tuple(op.qubits))
+                if id_key in shifted_ids:
+                    continue
+
+                id_qubits = set(op.qubits)
+
+                # try swap with i+1 moment
+                if i + 1 < num_moments:
+                    next_ops = list(new_moments[i + 1].operations)
+                    for j, next_op in enumerate(next_ops):
+                        if not isinstance(next_op.gate, cirq.CNotPowGate) and set(next_op.qubits) == id_qubits:
+                            ops[op_idx], next_ops[j] = next_ops[j], ops[op_idx]
+                            new_moments[i] = cirq.Moment(ops)
+                            new_moments[i + 1] = cirq.Moment(next_ops)
+                            shifted_ids.discard((i, tuple(op.qubits)))
+                            shifted_ids.add((i + 1, tuple(op.qubits)))  # mark new location
+                            break
+
+                # try swap with i-1 moment
+                elif i - 1 >= 0:
+                    prev_ops = list(new_moments[i - 1].operations)
+                    for j, prev_op in enumerate(prev_ops):
+                        if not isinstance(prev_op.gate, cirq.CNotPowGate) and set(prev_op.qubits) == id_qubits:
+                            ops[op_idx], prev_ops[j] = prev_ops[j], ops[op_idx]
+                            new_moments[i] = cirq.Moment(ops)
+                            new_moments[i - 1] = cirq.Moment(prev_ops)
+                            shifted_ids.discard((i, tuple(op.qubits)))
+                            shifted_ids.add((i - 1, tuple(op.qubits)))
+                            break
     return cirq.Circuit(new_moments)
     
 # ---------------------------------
