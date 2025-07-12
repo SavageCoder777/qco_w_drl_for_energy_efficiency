@@ -207,9 +207,12 @@ def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
 
     max_moment = max(ops_by_moment.keys(), default=-1)
     moments = [cirq.Moment(ops_by_moment.get(i, [])) for i in range(max_moment + 1)]
-    return cirq.Circuit(moments)  
+    return cirq.Circuit(moments)
 
 def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
+# Semantic error. The function does not check if the operations that commutes are on the same qubit
+# May also have other issues, see code_verification\apply_commutation.ipynb
+# TODO Debug this function
     moments = list(circuit)
     new_moments = []
 
@@ -231,7 +234,7 @@ def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
             for idx2, op2 in enumerate(m2_ops):
                 if idx2 in swapped_m2_indices:
                     continue
-                if cirq.commutes(op1, op2, atol=1e-6):
+                if cirq.commutes(op1, op2, atol=1e-6): ### Checks only if operations commute and not if they are on the same qubit
                     to_move_to_m2.append(op1)
                     to_move_to_m1.append(op2)
                     swapped_m2_indices.add(idx2)
@@ -279,22 +282,54 @@ def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
 # ---------------------------------
 
 def circuit_from_cirq(circuit: cirq.Circuit) -> zx.Circuit:
+# Verified and debugged. See code_verification\circuit_from_cirq.ipynb
+    '''
+    This function converts a Cirq circuit to a PyZX circuit.
+    It supports the following gates:
+    - H (Hadamard)
+    - X, Z (with phase)
+    - CNOT (controlled-NOT)
+    - CZ (controlled-Z)
+    '''
     zx_circ = zx.Circuit(MAX_QUBITS)
-    for moment in circuit:
+    for i, moment in enumerate(circuit):
         for op in moment:
             gate = op.gate
             q = [q.x for q in op.qubits]
             if isinstance(gate, cirq.HPowGate) and np.isclose(gate.exponent, 1):
                 zx_circ.add_gate("H", q[0])
             elif isinstance(gate, cirq.XPowGate):
-                zx_circ.add_gate("XPhase", q[0], phase=Fraction(gate.exponent).limit_denominator(1000))
+                phase = Fraction(gate.exponent).limit_denominator(1000)
+                zx_circ.add_gate("XPhase", q[0], phase=phase)
+            elif isinstance(gate, cirq.ZPowGate):
+                phase = Fraction(gate.exponent).limit_denominator(1000)
+                zx_circ.add_gate("ZPhase", q[0], phase=phase)
             elif isinstance(gate, cirq.YPowGate):
-                pass  # PyZX does not support Y rotations directly
+                pass
+                # We avoid using YPhase
+                # phase = Fraction(gate.exponent).limit_denominator(1000)
+                # zx_circ.add_gate("YPhase", q[0], phase=phase)
+                # displays YPhase gate via combination of X and Z phases
             elif isinstance(gate, cirq.CNotPowGate) and np.isclose(gate.exponent, 1):
                 zx_circ.add_gate("CNOT", q[0], q[1])
+            elif isinstance(gate, cirq.CZPowGate) and np.isclose(gate.exponent, 1):
+                zx_circ.add_gate("CZ", q[0], q[1])
+            else:
+                print(f"    -> Unsupported or unknown gate: {type(gate)}")
     return zx_circ
 
 def pyzx_to_cirq(pyzx_circuit):
+# Verified and debugged. See code_verification\pyzx_to_cirq.ipynb
+    '''
+    Converts a PyZX circuit to a Cirq circuit.
+    Supports the following gates:
+    - XPhase (X with phase)
+    - ZPhase (Z with phase)
+    - Hadamard (H)
+    - CNOT (controlled-NOT)
+    - CZ (controlled-Z)
+    '''
+    pi = 3.141592653589793
     ops = []
     def get_qubits_used():
         max_index = 0
@@ -317,10 +352,10 @@ def pyzx_to_cirq(pyzx_circuit):
         name = gate.name.upper()
         if name == "ZPHASE":
             q = gate.target if isinstance(gate.target, int) else gate.target[0]
-            ops.append(cirq.rz(gate.phase).on(cirq_qubits[q]))
+            ops.append(cirq.rz(gate.phase * pi).on(cirq_qubits[q]))
         elif name == "XPHASE":
             q = gate.target if isinstance(gate.target, int) else gate.target[0]
-            ops.append(cirq.rx(gate.phase).on(cirq_qubits[q]))
+            ops.append(cirq.rx(gate.phase * pi).on(cirq_qubits[q]))
         elif name == "HAD":
             q = gate.target if isinstance(gate.target, int) else gate.target[0]
             ops.append(cirq.H(cirq_qubits[q]))
@@ -336,13 +371,34 @@ def pyzx_to_cirq(pyzx_circuit):
             pass  # or: print(f"Unrecognized gate {name}, skipping.")
     return cirq.Circuit(ops)
 
+
 def apply_zx_simplification(circuit: cirq.Circuit) -> cirq.Circuit:
+# Verified. See code_verification/apply_zx_simplification.ipynb
+# The functionality or method for simplification is based on 
+# https://arxiv.org/abs/2003.01664
+    '''
+    Applies simplification to the Cirq circuit using PyZX.
+    These simplifications however tends to increase gate depth and gate count 
+    so during the deep RL training, these functions may not be used as much.
+    Uses the pyzx methods
+    - match_w_fusion_parallel:  wire fusion.
+                                See https://pyzx.readthedocs.io/en/latest/api.html#pyzx.rules.match_w_fusion_parallel
+
+    - match_ids, remove_ids:    to find identity pairs and remove them.
+                                See https://pyzx.readthedocs.io/en/latest/api.html#pyzx.rules.remove_ids
+
+    - extract_circuit:          to extract the simplified circuit.
+                                See https://arxiv.org/abs/2003.01664
+    '''
     zx_circ = circuit_from_cirq(circuit)
     g = zx_circ.to_graph()
     simplify.match_w_fusion_parallel(g)  # fuse some gates
-    matches = simplify.match_ids(g)      # find identity pairs
-    simplify.remove_ids(g, matches)      # remove them
-    simplified = extract.extract_circuit(g)
+
+    matches = simplify.match_ids(g)      # find identity pairs and remove
+    simplify.remove_ids(g, matches)      
+
+    simplified = extract.extract_circuit(g) # simplify
+
     cirq_circ = pyzx_to_cirq(simplified)
     if len(list(cirq_circ.all_operations())) == 0:
         return circuit  # fallback if too much was removed
