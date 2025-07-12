@@ -27,7 +27,7 @@ MAX_TEST_CIRCUITS = 100
 
 
 def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH):
-# Verified
+# Verified 
     qubits = [cirq.LineQubit(i) for i in range(n_qubits)]
     circuit = cirq.Circuit()
     for _ in range(depth):
@@ -49,7 +49,7 @@ def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH
     return circuit
 
 def generate_dataset(num_circuits, path='dataset/'):
-# L!?: The function generates a number of circuits dataset; does not separate it into training and test sets
+# The function generates a number of circuits dataset; does not separate it into training and test sets
     os.makedirs(path, exist_ok=True)
     for i in range(num_circuits):
         c = generate_random_superconducting_circuit()
@@ -59,7 +59,7 @@ def generate_dataset(num_circuits, path='dataset/'):
             print(f"Generated {i + 1}/{num_circuits} circuits...")
 
 def load_dataset(path='dataset/', limit=None):
-# Verified
+# Verified 
     files = sorted([f for f in os.listdir(path) if f.endswith('.pkl')])[:limit]
     return [pickle.load(open(os.path.join(path, f), 'rb')) for f in files]
 
@@ -68,8 +68,8 @@ def load_dataset(path='dataset/', limit=None):
 # ----------------------
 
 def evaluate_circuit(circuit):
-# B!: The energy is calculated as (qubit # * gate depth * coefficient)
-# verified 
+# Semantic error. The energy is calculated as (qubit # * gate depth * coefficient)
+# Verified 
 
 # B!: qubit count calculation must be incorporated
 # verified 
@@ -93,6 +93,10 @@ def evaluate_circuit(circuit):
 # ------------------------
 
 def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
+# Semantic error. The iterator through the circuit iterates by moments, but within 
+# the moment, the operators are chosen arbitrarily. The previous op is not the operation 
+# before the current op on the same qubit. See code_verification\apply_gate_cancellation.ipynb
+# TODO Debug this function
     new_ops = []
     prev_op = None
     for op in circuit.all_operations():
@@ -109,6 +113,8 @@ def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
     return cirq.Circuit(new_ops)
 
 def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
+# Semantic error. Same issue as in apply_gate_cancellation.
+# TODO Debug this function
     new_ops = []
     pending = {}
 
