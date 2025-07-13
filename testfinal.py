@@ -13,11 +13,6 @@ from fractions import Fraction
 from scipy.stats import sem  # for standard error
 import seaborn as sns  # for better scatter visuals
 from collections import defaultdict
-from qiskit import QuantumCircuit
-from qiskit_aer import Aer
-from qiskit.result import Counts
-from qiskit_aer import AerSimulator
-from qiskit import transpile
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
@@ -484,8 +479,10 @@ def apply_zx_simplification(circuit: cirq.Circuit) -> cirq.Circuit:
 # -------------------------
 # 3.75. HELLINGER FIDELITY
 # -------------------------
-
+'''
+REMOVED
 def hellinger_fidelity(counts1: Counts, counts2: Counts):
+# The function calls itself recursively
     """Compute Hellinger fidelity between two distributions."""
     keys = set(counts1.keys()).union(counts2.keys())
     p = np.array([counts1.get(k, 0) for k in keys], dtype=np.float64)
@@ -493,7 +490,8 @@ def hellinger_fidelity(counts1: Counts, counts2: Counts):
     p /= p.sum()
     q /= q.sum()
     return 1 - hellinger_fidelity(p, q)
-
+'''
+'''
 def cirq_to_qasm_counts(circuit: cirq.Circuit, shots=1024):
     try:
         qasm_str = cirq.qasm(circuit)
@@ -507,8 +505,22 @@ def cirq_to_qasm_counts(circuit: cirq.Circuit, shots=1024):
     except Exception as e:
         print(f"[ERROR] QASM conversion or simulation failed: {e}")
         return {}  # Always return a dict
+'''
+def cirq_counts(circuit: cirq.Circuit, shots=1024):
+# Verified. See code_verification\cirq_counts.ipynb
+    qubits = list(circuit.all_qubits())
+    circuit = circuit.copy()
+    circuit.append(cirq.measure(*qubits, key='m'))
+
+    simulator = cirq.Simulator()
+    result = simulator.run(circuit, repetitions=shots)
+    hist = result.histogram(key='m')
+
+    counts = {format(k, f'0{len(qubits)}b'): v for k, v in hist.items()}
+    return counts
 
 def hellinger_fidelity(counts1, counts2):
+# Verified and debugged. See code_verification\hellinger_fidelity.ipynb
     """Compute Hellinger fidelity between two count dictionaries."""
     if not counts1 or not counts2:
         return 0.0  # fallback if any input is empty
@@ -523,11 +535,13 @@ def hellinger_fidelity(counts1, counts2):
     p = np.array([np.sqrt(counts1.get(k, 0) / shots1) for k in all_keys])
     q = np.array([np.sqrt(counts2.get(k, 0) / shots2) for k in all_keys])
 
-    fidelity = np.sum(np.minimum(p, q)) ** 2
+    fidelity = np.sum(p * q) ** 2
     return fidelity
 
 def compute_reward(agent_circuit, baseline_counts, shots=1024, g=0, r=1024, P_system=1.0, gate_freq=1.0, Nq=12, Nd=50, w1=1.0, w2=1.0):
-    agent_counts = cirq_to_qasm_counts(agent_circuit, shots=shots)
+# Needs to be discussed and debugged. reward needs normalization, 
+# r value needs to be discussed due to large circuit size
+    agent_counts = cirq_counts(agent_circuit, shots=shots)
     fidelity = hellinger_fidelity(agent_counts, baseline_counts)
 
     # Total energy
@@ -538,6 +552,7 @@ def compute_reward(agent_circuit, baseline_counts, shots=1024, g=0, r=1024, P_sy
     return reward, fidelity, energy_cost
 
 def determine_r_from_fidelity(fidelity: float) -> int:
+# Needs discussion, see above comment
     r_min, r_max = 64, 1024
     # Inverse sigmoid-like: lower fidelity = higher r
     decay = (1 - fidelity) ** 2
@@ -557,7 +572,7 @@ class QuantumPruneEnv(gym.Env):
         self.max_steps = MAX_TEST_STEPS
         self.steps_taken = 0
         self.global_step = 0
-        self.baseline_counts = cirq_to_qasm_counts(self.original_circuit, shots=1024)
+        self.baseline_counts = cirq_counts(self.original_circuit, shots=1024)
         self.r = 1024
 
     def reset(self, seed=None, options=None):
