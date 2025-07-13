@@ -1,0 +1,8 @@
+cirq
+numpy
+gymnasium
+matplotlib
+pyzx
+scipy
+seaborn
+stable-baselines3
