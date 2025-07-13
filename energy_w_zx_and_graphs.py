@@ -84,8 +84,7 @@ def evaluate_circuit(circuit):
     return {
         'depth': depth,
         'gate_count': gate_count,
-        'energy': energy,
-        'qubit_count': qubit_count
+        'energy': energy
     }
 
 
@@ -496,8 +495,8 @@ class QuantumPruneEnv(gym.Env):
         depth_delta = before['depth'] - after['depth']
         gate_delta = before['gate_count'] - after['gate_count']
         energy_delta = before['energy'] - after['energy']
-        qubit_count_delta = before['qubit_count'] - after['qubit_count']
-        reward = depth_delta + 0.8 * gate_delta +  energy_delta + qubit_count_delta
+        #qubit_count_delta = before['qubit_count'] - after['qubit_count']
+        reward = depth_delta + 0.8 * gate_delta +  energy_delta 
         if after['gate_count'] == 0: reward = -1
         self.steps_taken += 1
         done = self.steps_taken >= self.max_steps
@@ -506,7 +505,7 @@ class QuantumPruneEnv(gym.Env):
         training_history['depth'].append(after['depth'])
         training_history['gate_count'].append(after['gate_count'])
         training_history['energy'].append(after['energy'])
-        training_history['qubit_count'].append(after['qubit_count'])
+        #training_history['qubit_count'].append(after['qubit_count'])
 
         return self._encode_circuit(), reward, done, False, {}
 
@@ -516,10 +515,9 @@ class QuantumPruneEnv(gym.Env):
             stats['depth'] / 100,
             stats['gate_count'] / 100,
             stats['energy'] / 100,
-            stats['qubit_count'] / 100,
             len(self.circuit) / 100,
             self.steps_taken / self.max_steps
-        ] + [0]*5, dtype=np.float32)
+        ] + [0]*6, dtype=np.float32)
 
 # ------------------------------
 # 5. EVALUATION + VISUALIZATION
@@ -554,7 +552,7 @@ def plot_depth_comparison(results):
     plt.savefig("energy_comparison.png")
     plt.close()
 
-def plot_rl_training_scatter(depths, gates, energies, qubit_counts):
+def plot_rl_training_scatter(depths, gates, energies):
     import matplotlib.pyplot as plt
     import numpy as np
 
@@ -578,7 +576,7 @@ def plot_rl_training_scatter(depths, gates, energies, qubit_counts):
     plot_scatter(depths, "d", "train_depth_scatter.png")
     plot_scatter(gates, "n", "train_gate_scatter.png")
     plot_scatter(energies, "Energy", "train_energy_scatter.png")
-    plot_scatter(qubit_counts, "qubit count", "train_qubit_count_scatter.png")
+    # plot_scatter(qubit_counts, "qubit count", "train_qubit_count_scatter.png")
 
 def plot_test_examples_5(test_logs, rounds, ylabel, filename):
     import matplotlib.pyplot as plt
@@ -626,7 +624,7 @@ def get_training_stats(model):
     depth_vals = []
     gate_vals = []
     energy_vals = []
-    qubit_count_vals = []
+    # qubit_count_vals = []
 
     env = BatchEnv(circuits)
     obs, _ = env.reset()
@@ -640,9 +638,9 @@ def get_training_stats(model):
             depth_vals.append((step, evals['depth']))
             gate_vals.append((step, evals['gate_count']))
             energy_vals.append((step, evals['energy']))
-            qubit_count_vals.append((step, evals['qubit_count']))
+            # qubit_count_vals.append((step, evals['qubit_count']))
 
-    return depth_vals, gate_vals, energy_vals, qubit_count_vals
+    return depth_vals, gate_vals, energy_vals
 
 def plot_training_stats(stats, title, ylabel, filename):
     steps, values = zip(*stats)
@@ -749,19 +747,18 @@ if __name__ == '__main__':
     training_history = {
         'depth': [],
         'gate_count': [],
-        'energy': [],
-        'qubit_count': []
+        'energy': []
     }
     print("[3/4] Training PPO model (short run: 50k steps)...")
     vec_env = make_vec_env(lambda: BatchEnv(circuits), n_envs=4)
     model = PPO("MlpPolicy", vec_env, verbose=1)
     model.learn(total_timesteps=MAX_TRAIN_STEPS)
 
-    depths, gates, energies, qubit_counts = get_training_stats(model)
+    depths, gates, energies = get_training_stats(model)
     plot_training_stats(depths, "RL Training Progress (Depth)", "d", "train_depth.png")
     plot_training_stats(gates, "RL Training Progress (Gate Count)", "n", "train_gate.png")
     plot_training_stats(energies, "RL Training Progress (Energy)", "E", "train_energy.png")
-    plot_training_stats(qubit_counts, "RL Training Progress (Qubit Count)", "qubit count", "train_qubit_count.png")
+    # plot_training_stats(qubit_counts, "RL Training Progress (Qubit Count)", "qubit count", "train_qubit_count.png")
 
     print("[4/4] Generating and evaluating test circuits...")
     generate_dataset(MAX_TEST_CIRCUITS, path='test_set/')
@@ -771,26 +768,26 @@ if __name__ == '__main__':
     plot_in_game_progress(eval_circuits, model, metric='depth', filename='test_depth.png')
     plot_in_game_progress(eval_circuits, model, metric='gate_count', filename='test_gate.png')
     plot_in_game_progress(eval_circuits, model, metric='energy', filename='test_energy.png')
-    plot_in_game_progress(eval_circuits, model, metric='qubit_count', filename='test_qubit_count.png')
+    # plot_in_game_progress(eval_circuits, model, metric='qubit_count', filename='test_qubit_count.png')
 
     before_avg_depth = np.mean([r[0]['depth'] for r in results])
     after_avg_depth = np.mean([r[1]['depth'] for r in results])
     print(f"✔ Evaluation complete. Avg depth before: {before_avg_depth:.2f}, after: {after_avg_depth:.2f}")
 
-    before_avg_qubit_count = np.mean([r[0]['qubit_count'] for r in results])
-    after_avg_qubit_count = np.mean([r[1]['qubit_count'] for r in results])
-    print(f"✔ Evaluation complete. Avg qubit_count before: {before_avg_qubit_count:.2f}, after: {after_avg_qubit_count:.2f}")    
+    # before_avg_qubit_count = np.mean([r[0]['qubit_count'] for r in results])
+    # after_avg_qubit_count = np.mean([r[1]['qubit_count'] for r in results])
+    # print(f"✔ Evaluation complete. Avg qubit_count before: {before_avg_qubit_count:.2f}, after: {after_avg_qubit_count:.2f}")    
 
     before_avg_energy = np.mean([r[0]['energy'] for r in results])
     after_avg_energy = np.mean([r[1]['energy'] for r in results])
     print(f"✔ Evaluation complete. Avg energy before: {before_avg_energy:.2f}, after: {after_avg_energy:.2f}")
 
     print(f"Depth decreased by {(before_avg_depth - after_avg_depth) / before_avg_depth * 100:.2f}%")
-    print(f"Qubit count decreased by {(before_avg_qubit_count - after_avg_qubit_count) / before_avg_qubit_count * 100:.2f}%")
+    # print(f"Qubit count decreased by {(before_avg_qubit_count - after_avg_qubit_count) / before_avg_qubit_count * 100:.2f}%")
     print(f"Energy decreased by {(before_avg_energy - after_avg_energy) / before_avg_energy * 100:.2f}%")
     print("📊 Saving depth comparison plot to depth_comparison.png...")
 
     plot_percent_scatter(results, 'depth', 'energy', "RL Agent (600 rounds)", "percent_change_energy_vs_depth_rl.png")
-    plot_percent_scatter(results, 'qubit_count', 'energy', "RL Agent (600 rounds)", "percent_change_energy_vs_qubit_count_rl.png")
+    # plot_percent_scatter(results, 'qubit_count', 'energy', "RL Agent (600 rounds)", "percent_change_energy_vs_qubit_count_rl.png")
     plot_depth_comparison(results)
     print("✅ All done!")
