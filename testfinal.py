@@ -606,7 +606,7 @@ class QuantumPruneEnv(gym.Env):
         training_history['energy'].append(after['energy'])
         training_history['qubit_count'].append(after['qubit_count'])
         if self.global_step % 10000 == 0 and self.global_step > 0:
-                agent_counts = cirq_to_qasm_counts(self.circuit, shots=1024)
+                agent_counts = cirq_counts(self.circuit, shots=1024)
                 fidelity = hellinger_fidelity(agent_counts, self.baseline_counts)
                 self.r = determine_r_from_fidelity(fidelity)
                 print(f"Updated r value to {self.r}.")
