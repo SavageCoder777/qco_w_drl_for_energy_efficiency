@@ -6,3 +6,4 @@ pyzx
 scipy
 seaborn
 stable-baselines3
+qsimcirq

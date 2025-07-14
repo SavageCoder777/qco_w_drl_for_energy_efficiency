@@ -13,6 +13,7 @@ from fractions import Fraction
 from scipy.stats import sem  # for standard error
 import seaborn as sns  # for better scatter visuals
 from collections import defaultdict
+from qsimcirq import QSimSimulator
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
@@ -20,7 +21,6 @@ from stable_baselines3.common.env_util import make_vec_env
 MAX_QUBITS = 12
 MAX_DEPTH = 150
 MAX_GATES = MAX_QUBITS * MAX_DEPTH
-MAX_ENERGY = MAX_GATES * 0.18
 MAX_TEST_STEPS = 20
 MAX_TRAIN_STEPS = 50_000
 MAX_TRAIN_CIRCUITS = 17_500
@@ -31,7 +31,6 @@ W_FREQUENCY = 83_333_333.33
 # -----------------------------
 # 1. RANDOM CIRCUIT GENERATION
 # -----------------------------
-
 
 def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH):
 # Verified 
@@ -74,23 +73,17 @@ def load_dataset(path='dataset/', limit=None):
 # ----------------------
 
 def evaluate_circuit(self, circuit):
-# Semantic error. The energy is calculated as (qubit # * gate depth * coefficient)
-# Verified 
-
-# B!: qubit count calculation must be incorporated
-# verified 
-
-    # Estimate depth as the number of non-empty moments (layers)
+# Verified
     depth = sum(1 for m in circuit if m.operations)
-    # Count total number of gates
     gate_count = len([op for op in circuit.all_operations()])
     qubit_count = len(circuit.all_qubits())
     r_value = getattr(self, 'r')  # fallback if not set
-    energy = (gate_count * r_value * P_SYSTEM / W_FREQUENCY) * qubit_count * depth
+    energy = (1 * r_value * P_SYSTEM / W_FREQUENCY) * qubit_count * depth
     return {
         'depth': depth,
         'gate_count': gate_count,
         'energy': energy,
+        'r_value': r_value,
         'qubit_count': qubit_count,
     }
 
@@ -479,40 +472,14 @@ def apply_zx_simplification(circuit: cirq.Circuit) -> cirq.Circuit:
 # -------------------------
 # 3.75. HELLINGER FIDELITY
 # -------------------------
-'''
-REMOVED
-def hellinger_fidelity(counts1: Counts, counts2: Counts):
-# The function calls itself recursively
-    """Compute Hellinger fidelity between two distributions."""
-    keys = set(counts1.keys()).union(counts2.keys())
-    p = np.array([counts1.get(k, 0) for k in keys], dtype=np.float64)
-    q = np.array([counts2.get(k, 0) for k in keys], dtype=np.float64)
-    p /= p.sum()
-    q /= q.sum()
-    return 1 - hellinger_fidelity(p, q)
-'''
-'''
-def cirq_to_qasm_counts(circuit: cirq.Circuit, shots=1024):
-    try:
-        qasm_str = cirq.qasm(circuit)
-        qc = QuantumCircuit.from_qasm_str(qasm_str)
-        qc.measure_all()
 
-        sim = AerSimulator()
-        qc = transpile(qc, sim)
-        result = sim.run(qc, shots=shots).result()
-        return result.get_counts()
-    except Exception as e:
-        print(f"[ERROR] QASM conversion or simulation failed: {e}")
-        return {}  # Always return a dict
-'''
 def cirq_counts(circuit: cirq.Circuit, shots=1024):
 # Verified. See code_verification\cirq_counts.ipynb
     qubits = list(circuit.all_qubits())
     circuit = circuit.copy()
     circuit.append(cirq.measure(*qubits, key='m'))
 
-    simulator = cirq.Simulator()
+    simulator = QSimSimulator()
     result = simulator.run(circuit, repetitions=shots)
     hist = result.histogram(key='m')
 
@@ -538,26 +505,6 @@ def hellinger_fidelity(counts1, counts2):
     fidelity = np.sum(p * q) ** 2
     return fidelity
 
-def compute_reward(agent_circuit, baseline_counts, shots=1024, g=0, r=1024, P_system=1.0, gate_freq=1.0, Nq=12, Nd=50, w1=1.0, w2=1.0):
-# Needs to be discussed and debugged. reward needs normalization, 
-# r value needs to be discussed due to large circuit size
-    agent_counts = cirq_counts(agent_circuit, shots=shots)
-    fidelity = hellinger_fidelity(agent_counts, baseline_counts)
-
-    # Total energy
-    energy_cost = (g * r * P_system / gate_freq) * Nq * Nd
-
-    # Reward: maximize fidelity, minimize energy
-    reward = (-w1 * energy_cost) + (w2 * fidelity)
-    return reward, fidelity, energy_cost
-
-def determine_r_from_fidelity(fidelity: float) -> int:
-# Needs discussion, see above comment
-    r_min, r_max = 64, 1024
-    # Inverse sigmoid-like: lower fidelity = higher r
-    decay = (1 - fidelity) ** 2
-    return int(r_min + (r_max - r_min) * decay)
-
 # ------------------
 # 4. CUSTOM GYM ENV
 # ------------------
@@ -567,13 +514,14 @@ class QuantumPruneEnv(gym.Env):
         super().__init__()
         self.original_circuit = base_circuit
         self.circuit = base_circuit.copy()
-        self.action_space = spaces.Discrete(4)  # merge, cancel, commute, ZX
-        self.observation_space = spaces.Box(low=0, high=1, shape=(11,), dtype=np.float32)
+
+        self.action_space = spaces.Discrete(6)  # merge, cancel, commute, ZX, increase r, decrease r
+        self.observation_space = spaces.Box(low=0, high=1, shape=(11,), dtype=np.float32) #? 1D array with 11 elements
         self.max_steps = MAX_TEST_STEPS
         self.steps_taken = 0
-        self.global_step = 0
-        self.baseline_counts = cirq_counts(self.original_circuit, shots=1024)
-        self.r = 1024
+
+        self.baseline_counts = cirq_counts(self.original_circuit, shots=204800)
+        self.r = 204800 # about 2^12 * 50, 50 shots per outcome on average
 
     def reset(self, seed=None, options=None):
         self.circuit = self.original_circuit.copy()
@@ -582,6 +530,7 @@ class QuantumPruneEnv(gym.Env):
 
     def step(self, action):
         before = evaluate_circuit(self, self.circuit)
+
         if action == 0:
             self.circuit = apply_gate_merging(self.circuit)
         elif action == 1:
@@ -590,26 +539,40 @@ class QuantumPruneEnv(gym.Env):
             self.circuit = apply_commutation(self.circuit)
         elif action == 3:
             self.circuit = apply_zx_simplification(self.circuit)
-        after = evaluate_circuit(self, self.circuit)
-        depth_delta = before['depth'] - after['depth']
-        gate_delta = before['gate_count'] - after['gate_count']
+        # the below is reasonable because on average, it increases by one shot number for every outcome
+        elif action == 4: # increase r
+            self.r += 2**MAX_QUBITS 
+        elif action == 5: # decrease r
+            self.r -= 2**MAX_QUBITS
+
+        if self.r < 1:
+            self.r = 1;
+        
+        after = evaluate_circuit(self, self.circuit)          
+
+        # Reward
+        agent_counts = cirq_counts(self.circuit, shots=self.r)
+        fidelity = hellinger_fidelity(agent_counts, self.baseline_counts)
         energy_delta = before['energy'] - after['energy']
-        qubit_count_delta = before['qubit_count'] - after['qubit_count']
-        reward = depth_delta + 0.8 * gate_delta +  energy_delta + qubit_count_delta
-        if after['gate_count'] == 0: reward = -1
+
+        reward = -energy_delta * fidelity # will need studying for design
+
+        if after['gate_count'] == 0:
+            reward = -1
+
         self.steps_taken += 1
-        self.global_step += 1
+
+        print(self.steps_taken)
         done = self.steps_taken >= self.max_steps
+
         # Track metrics during training for Plot 1
         training_history['depth'].append(after['depth'])
         training_history['gate_count'].append(after['gate_count'])
         training_history['energy'].append(after['energy'])
         training_history['qubit_count'].append(after['qubit_count'])
-        if self.global_step % 10000 == 0 and self.global_step > 0:
-                agent_counts = cirq_counts(self.circuit, shots=1024)
-                fidelity = hellinger_fidelity(agent_counts, self.baseline_counts)
-                self.r = determine_r_from_fidelity(fidelity)
-                print(f"Updated r value to {self.r}.")
+        training_history['fidelity'].append(fidelity)
+        training_history['reward'].append(reward)
+
         return self._encode_circuit(), reward, done, False, {}
 
     def _encode_circuit(self):
@@ -857,15 +820,22 @@ if __name__ == '__main__':
         'depth': [],
         'gate_count': [],
         'energy': [],
-        'qubit_count': []
+        'qubit_count': [],
+        'fidelity': [],
+        'reward': []
     }
+
     print("[3/4] Training PPO model (short run: 50k steps)...")
+
+    # Not parallized
     vec_env = make_vec_env(lambda: BatchEnv(circuits), n_envs=4)
     model = PPO("MlpPolicy", vec_env, verbose=1, n_steps=512)
     callback = PrintStepsCallback()
     model.learn(total_timesteps=MAX_TRAIN_STEPS, callback=callback)
 
 
+
+    ### PLOTTING
     depths, gates, energies, qubit_counts = get_training_stats(model)
     plot_training_stats(depths, "RL Training Progress (Depth)", "d", "train_depth.png")
     plot_training_stats(gates, "RL Training Progress (Gate Count)", "n", "train_gate.png")
