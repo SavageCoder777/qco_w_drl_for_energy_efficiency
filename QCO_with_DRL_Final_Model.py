@@ -1,3 +1,15 @@
+### Quantum Circuit Optimization (QCO) using Deep Reinforcement Learning (DRL) Model
+#
+# - Creates arbritrary qubit circuits and attempts to increase energy efficiency through
+#   training the DRL model--specifically PPO--to apply gate transformations reducing the
+#   depth/gate count/energy of the circuit while maintaining overall logic.
+# - Generative AI was used to help with part of this code; the 'check' emojis from the
+#   AI responses were liked by the researchers so incorporated into the final logs in
+#   the code.
+#
+# Copyright 2025 UCSB SRA Track 7 Team 6
+
+# Initial necessary imports; find required libraries in requirements.txt
 import cirq
 from cirq import ops
 import numpy as np
@@ -30,22 +42,24 @@ import sys
 from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.callbacks import CheckpointCallback
 
+# Setting Hyperparameters
 MAX_QUBITS = 12
 MAX_DEPTH = 150
 MAX_GATES = MAX_QUBITS * MAX_DEPTH
 MAX_TEST_STEPS = 20
-MAX_TRAIN_STEPS = 350_000
-MAX_TRAIN_CIRCUITS = 17_500
-MAX_TEST_CIRCUITS = 500
-P_SYSTEM = 15_000
-W_FREQUENCY = 83_333_333.33
-R_START = (2**MAX_QUBITS) * 50 / 2
-LOG_FREQ = 512
+MAX_TRAIN_STEPS = 350_000 # time steps the model takes during training
+MAX_TRAIN_CIRCUITS = 17_500 # how many circuits to be created and train the model on
+MAX_TEST_CIRCUITS = 500 # how many circuits the trained model optimizes
+P_SYSTEM = 15_000 # specific for superconducting quantum computer
+W_FREQUENCY = 83_333_333.33 # specific for superconducting quantum computer
+R_START = (2**MAX_QUBITS) * 50 / 2 # change depending on how many steps per gate are needed
+LOG_FREQ = 512 # how frequently the parameter changes are logged
 
 # -----------------------------
 # 1. RANDOM CIRCUIT GENERATION
 # -----------------------------
 
+# Generate a random circuit with Rx, Rz, and CNOT quantum gates
 def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH):
 # Verified 
     qubits = [cirq.LineQubit(i) for i in range(n_qubits)]
@@ -69,8 +83,8 @@ def generate_random_superconducting_circuit(n_qubits=MAX_QUBITS, depth=MAX_DEPTH
         circuit.append(layer)
     return circuit
 
-def generate_dataset(num_circuits, path='dataset/'):
 # The function generates a number of circuits dataset; does not separate it into training and test sets
+def generate_dataset(num_circuits, path='dataset/'):
     os.makedirs(path, exist_ok=True)
     for i in range(num_circuits):
         c = generate_random_superconducting_circuit()
@@ -79,6 +93,7 @@ def generate_dataset(num_circuits, path='dataset/'):
         if (i + 1) % 100 == 0:
             logging.info(f"Generated {i + 1}/{num_circuits} circuits...")
 
+# Loads a generated dataset for model training
 def load_dataset(path='dataset/', limit=None):
 # Verified 
     files = sorted([f for f in os.listdir(path) if f.endswith('.pkl')])[:limit]
@@ -88,6 +103,7 @@ def load_dataset(path='dataset/', limit=None):
 # 2. CIRCUIT EVALUATION
 # ----------------------
 
+# Evaluating circuit variables to measure reward and graph
 def evaluate_circuit(env, circuit):
 # Semantic error. The energy is calculated as (qubit # * gate depth * coefficient)
 # Verified 
@@ -113,6 +129,7 @@ def evaluate_circuit(env, circuit):
 # 3. GATE TRANSFORMATIONS
 # ------------------------
 
+# Cancels gates if they're 1) on the same qubit 2) the same gate 3) exponents adds to 0
 def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
     from collections import defaultdict
 
@@ -149,6 +166,7 @@ def apply_gate_cancellation(circuit: cirq.Circuit) -> cirq.Circuit:
 
     return new_circuit
 
+# Merges neighboring, congruent gates on the same qubit by adding exponents
 def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
     merged_ops_with_moments = []
     pending_rotations = defaultdict(list)  # qubit -> list of (moment_idx, op)
@@ -192,7 +210,7 @@ def apply_gate_merging(circuit: cirq.Circuit) -> cirq.Circuit:
                 q = qubits[0]
                 gate = op.gate
 
-                # If it's a rotation gate (Rx, Ry, Rz)
+                # If it's a rotation gate (Rx, Rz)
                 if hasattr(gate, "_rads"):
                     if pending_rotations[q]:
                         last_gate = pending_rotations[q][-1][1].gate
@@ -238,6 +256,7 @@ def remove_overlapping(ops_list):
             used_qubits.update(op.qubits)
     return filtered_ops
 
+# Commutes gates that satisfy AB=BA, where A and B are unitary operators
 def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
 # Verified and debugged. See code_verification\apply_commutation.ipynb for test cases.
     """
@@ -368,6 +387,7 @@ def spacer_around_CNOT(circuit: cirq.Circuit) -> cirq.Circuit:
 # 3.5. ZX-CALCULUS TRANSFORMATIONS
 # ---------------------------------
 
+# Converts cirq.Circuit to a QuantumCircuit
 def circuit_from_cirq(circuit: cirq.Circuit) -> zx.Circuit:
     zx_circ = zx.Circuit(MAX_QUBITS)
     for moment in circuit:
@@ -384,6 +404,7 @@ def circuit_from_cirq(circuit: cirq.Circuit) -> zx.Circuit:
                 zx_circ.add_gate("CNOT", q[0], q[1])
     return zx_circ
 
+# Converts QuantumCircuit to a cirq.Circuit
 def pyzx_to_cirq(pyzx_circuit):
     ops = []
     def get_qubits_used():
@@ -426,6 +447,7 @@ def pyzx_to_cirq(pyzx_circuit):
             pass
     return cirq.Circuit(ops)
 
+# Uses built in ZX-Calculus simplification function to act as another action to optimize the circuit
 def apply_zx_simplification(circuit: cirq.Circuit) -> cirq.Circuit:
     zx_circ = circuit_from_cirq(circuit)
     g = zx_circ.to_graph()
@@ -442,6 +464,7 @@ def apply_zx_simplification(circuit: cirq.Circuit) -> cirq.Circuit:
 # 3.75. HELLINGER FIDELITY
 # -------------------------
 
+# Computes Hellinger Fidelity and updates r accordingly to further try to optimize the energy calculation
 def cirq_counts(circuit: cirq.Circuit, shots=1024):
     qubits = list(circuit.all_qubits())
     circuit = circuit.copy()
@@ -499,7 +522,9 @@ def _adjust_r_based_on_fidelity(circuit, baseline_counts, r_initial=1024, min_r=
 # 4. CUSTOM GYM ENV
 # ------------------
 
+# Creates the gymnasium environment to run the DRL model
 class QuantumPruneEnv(gym.Env):
+    # Initializes necessary parameters and variables for further use and update
     def __init__(self, base_circuit):
         super().__init__()
         self.original_circuit = base_circuit
@@ -521,6 +546,7 @@ class QuantumPruneEnv(gym.Env):
         self.steps_taken = 0
         return self._encode_circuit(), {}
 
+    # Defines what should be done each step the DRL model takes (chooses actions 0, 1, 2, 3, 4, or 5)
     def step(self, action):
         before = evaluate_circuit(self, self.circuit)
         if action == 0:
@@ -597,7 +623,6 @@ class QuantumPruneEnv(gym.Env):
         r = self.r  # your dynamic repetition count
         Nq = len(self.circuit.all_qubits())
         Nd = len(self.circuit)  # depth as number of Moments
-
         return (g * r * P_SYSTEM / W_FREQUENCY) * Nq * Nd
 
 # ---------------------
@@ -609,6 +634,7 @@ def get_true_env(env):
         env = env.env
     return env
 
+# Used to log and save the runtime data in seperate files for further reference
 class SaveMetricsAndRolloutsCallback(BaseCallback):
     def __init__(self, save_freq=256, save_dir="outputs", verbose=1):
         super().__init__(verbose)
@@ -661,10 +687,12 @@ class SaveMetricsAndRolloutsCallback(BaseCallback):
                 print(f"[SaveMetrics] Saved rollout to {rollout_path}")
 
         return True
+
 # ------------------------------
 # 6. EVALUATION + VISUALIZATION
 # ------------------------------
 
+# Applies the model to each of the test circuits and works to optimize them
 def evaluate_on_dataset_with_model(circuits, model):
     results = []
     i = 0
@@ -683,6 +711,8 @@ def evaluate_on_dataset_with_model(circuits, model):
         i += 1
     return results
 
+# Many different types of plots/graphs showing the results of the training and optimization on
+# the test circuits
 def plot_depth_comparison(results):
     before_energies = [r[0]['energy'] for r in results]
     after_energies = [r[1]['energy'] for r in results]
@@ -699,9 +729,6 @@ def plot_depth_comparison(results):
     plt.close()
 
 def plot_rl_training_scatter(depths, gates, energies, qubit_counts):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     x = np.arange(0, len(depths)) * 10  # assuming logging every 10 epochs
 
     def plot_scatter(y, ylabel, filename):
@@ -725,8 +752,6 @@ def plot_rl_training_scatter(depths, gates, energies, qubit_counts):
     plot_scatter(qubit_counts, "qubit count", "train_qubit_count_scatter.png")
 
 def plot_test_examples_5(test_logs, rounds, ylabel, filename):
-    import matplotlib.pyplot as plt
-    import numpy as np
     plt.figure(figsize=(8, 4))
     for y in test_logs:
         plt.plot(rounds, y, color='orange', linewidth=1.5, alpha=0.7)
@@ -742,9 +767,6 @@ def plot_test_examples_5(test_logs, rounds, ylabel, filename):
     plt.close()
 
 def plot_percent_change_scatter(before_list, after_list, metric1, metric2, filename):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     x_change = []
     y_change = []
 
@@ -840,7 +862,7 @@ def plot_in_game_progress(circuits, model, metric='depth', filename=''):
     plt.close()
 
 def percent_delta(before, after, key):
-        return 100 * (after[key] - before[key]) / before[key]
+    return 100 * (after[key] - before[key]) / before[key]
 
 def plot_percent_scatter(results, key_x, key_y, label, filename):
     x = [percent_delta(b, a, key_x) for b, a in results]
@@ -859,9 +881,6 @@ def plot_percent_scatter(results, key_x, key_y, label, filename):
     plt.close()
 
 def plot_training_depth_with_scatter(depth_vals):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     steps, depths = zip(*depth_vals)
     steps = np.array(steps)
     depths = np.array(depths)
@@ -933,9 +952,6 @@ def plot_metric_from_log(file_path, metric, color='brown', save_as=None):
     print(f"[✓] Saved {metric} training plot to {save_as}")
 
 def plot_r_values(r_values, filename="train_r_scatter.png"):
-    import matplotlib.pyplot as plt
-    import numpy as np
-
     steps = np.arange(len(r_values))
     r_values = np.array(r_values)
 
@@ -986,6 +1002,7 @@ def plot_training_percent_change_from_log(file_path, metric_x, metric_y, save_pa
 # 7. SETUP LOGGER
 # ----------------
 
+# Logging configuration to 'print' to both terminal and logfile.log
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -1000,6 +1017,7 @@ logging.basicConfig(
 # ---------------
 sns.set(style="whitegrid")
 
+# Part of the callback to print variable values every X number of times, X=100
 class PrintStepsCallback(BaseCallback):
     def __init__(self, log_every=100, verbose=1):
         super().__init__(verbose)
@@ -1025,6 +1043,7 @@ class PrintStepsCallback(BaseCallback):
             )
         return True
 
+# Part of the callback to save the model at checkpoints at a frequency of save_freq
 class TrueTimestepCheckpointCallback(BaseCallback):
     def __init__(self, save_freq, save_path, name_prefix="model", verbose=1):
         super().__init__(verbose)
@@ -1044,6 +1063,8 @@ class TrueTimestepCheckpointCallback(BaseCallback):
                 logging.info(f"[✓] Model checkpoint saved at: {save_path}")
         return True
 
+# The main running calls to run the above defined functions, print out steps along the way
+# and successfully train a model and optimize a circuit for energy efficiency.
 if __name__ == '__main__':
     logging.info("[1/4] Generating training circuits (small run)...")
     generate_dataset(MAX_TRAIN_CIRCUITS, path='train_set/')
@@ -1190,7 +1211,6 @@ if __name__ == '__main__':
     plot_depth_comparison(results)
     logging.info("✅ All done!")
 
-## CALL MODEL AFTER RUN
-# from stable_baselines3 import PPO
+## CALL MODEL AFTER RUN (final model \n checkpoints respectively)
 # model = PPO.load("outputs/ppo_quantum_prune_model")
 # model = PPO.load("outputs/checkpoints/ppo_quantum_prune_50000_steps")
