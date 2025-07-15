@@ -42,8 +42,8 @@ MAX_QUBITS = 2
 MAX_DEPTH = 150
 MAX_GATES = MAX_QUBITS * MAX_DEPTH
 MAX_TEST_STEPS = 20
-MAX_TRAIN_STEPS = 350_000 # time steps the model takes during training
-MAX_TRAIN_CIRCUITS = 17_500 # how many circuits to be created and train the model on
+MAX_TRAIN_STEPS = 1000 #350_000 # time steps the model takes during training
+MAX_TRAIN_CIRCUITS = 100 #17_500 # how many circuits to be created and train the model on
 MAX_TEST_CIRCUITS = 500 # how many circuits the trained model optimizes
 P_SYSTEM = 15_000 # specific for superconducting quantum computer
 W_FREQUENCY = 83_333_333.33 # specific for superconducting quantum computer
@@ -511,10 +511,9 @@ def hellinger_fidelity(counts1, counts2):
     fidelity = np.sum(p * q) ** 2
     return fidelity
 
-def _adjust_r_based_on_fidelity(circuit, r_initial=(2**MAX_QUBITS), min_r=1, max_r=(2**MAX_QUBITS)*50, step=(2**MAX_QUBITS)*1):
+def _adjust_r_based_on_fidelity(circuit, baseline_counts, r_initial=(2**MAX_QUBITS), min_r=1, max_r=(2**MAX_QUBITS)*50, step=(2**MAX_QUBITS)*5):
     r = r_initial
     fidelity = 0.0
-    baseline_counts = cirq_counts_faster(circuit, shots=max_r)
     while r < max_r:
         agent_counts = cirq_counts_faster(circuit, shots=r)
         fidelity = hellinger_fidelity(agent_counts, baseline_counts)
@@ -543,6 +542,7 @@ class QuantumPruneEnv(gym.Env):
         self._gate_depth = 0
         self._energy = 0.0
         self._r = R_START
+        self.baseline_counts = cirq_counts_faster(self.original_circuit, shots=MAX_QUBITS**2 * 50)
         self._circuit = None
 
     def reset(self, seed=None, options=None):
