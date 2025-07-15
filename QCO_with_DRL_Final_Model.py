@@ -53,7 +53,7 @@ MAX_TEST_CIRCUITS = 500 # how many circuits the trained model optimizes
 P_SYSTEM = 15_000 # specific for superconducting quantum computer
 W_FREQUENCY = 83_333_333.33 # specific for superconducting quantum computer
 R_START = (2**MAX_QUBITS) * 50 / 2 # change depending on how many steps per gate are needed
-LOG_FREQ = 512 # how frequently the parameter changes are logged
+LOG_FREQ = 512 # how frequently the variable changes are logged
 
 # -----------------------------
 # 1. RANDOM CIRCUIT GENERATION
