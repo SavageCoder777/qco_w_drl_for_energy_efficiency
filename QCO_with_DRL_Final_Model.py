@@ -28,14 +28,15 @@ from qsimcirq import QSimSimulator
 import logging
 import sys
 from stable_baselines3.common.callbacks import CallbackList
+from stable_baselines3.common.callbacks import CheckpointCallback
 
 MAX_QUBITS = 12
-MAX_DEPTH = 10
+MAX_DEPTH = 150
 MAX_GATES = MAX_QUBITS * MAX_DEPTH
 MAX_TEST_STEPS = 20
-MAX_TRAIN_STEPS = 500
-MAX_TRAIN_CIRCUITS = 2_000
-MAX_TEST_CIRCUITS = 100
+MAX_TRAIN_STEPS = 350_000
+MAX_TRAIN_CIRCUITS = 17_500
+MAX_TEST_CIRCUITS = 500
 P_SYSTEM = 15_000
 W_FREQUENCY = 83_333_333.33
 R_START = (2**MAX_QUBITS) * 50 / 2
@@ -1024,6 +1025,25 @@ class PrintStepsCallback(BaseCallback):
             )
         return True
 
+class TrueTimestepCheckpointCallback(BaseCallback):
+    def __init__(self, save_freq, save_path, name_prefix="model", verbose=1):
+        super().__init__(verbose)
+        self.save_freq = save_freq
+        self.save_path = save_path
+        self.name_prefix = name_prefix
+        os.makedirs(save_path, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps % self.save_freq == 0:
+            save_path = os.path.join(
+                self.save_path,
+                f"{self.name_prefix}_{self.num_timesteps}_steps.zip"
+            )
+            self.model.save(save_path)
+            if self.verbose:
+                logging.info(f"[✓] Model checkpoint saved at: {save_path}")
+        return True
+
 if __name__ == '__main__':
     logging.info("[1/4] Generating training circuits (small run)...")
     generate_dataset(MAX_TRAIN_CIRCUITS, path='train_set/')
@@ -1060,8 +1080,23 @@ if __name__ == '__main__':
     logging.info("[3/4] Training PPO model (short run: 50k steps)...")
     vec_env = make_vec_env(lambda: BatchEnv(circuits), n_envs=4)
     model = PPO("MlpPolicy", vec_env, verbose=1, n_steps=256)
-    callback = CallbackList([SaveMetricsAndRolloutsCallback(save_freq=256, save_dir="outputs"), PrintStepsCallback(log_every=100)])
-    model.learn(total_timesteps=MAX_TRAIN_STEPS, callback=callback)
+
+    checkpoint_callback = TrueTimestepCheckpointCallback(
+    save_freq=512,
+    save_path="outputs/checkpoints/",
+    name_prefix="ppo_quantum_prune")
+
+    callback = CallbackList([
+    SaveMetricsAndRolloutsCallback(save_freq=512, save_dir="outputs"),
+    PrintStepsCallback(),
+    checkpoint_callback])
+    try:
+        model.learn(total_timesteps=MAX_TRAIN_STEPS, callback=callback)
+    except KeyboardInterrupt:
+        print("\n[!] Interrupted — saving model before exit...")
+        os.makedirs("outputs", exist_ok=True)
+        model.save("outputs/ppo_quantum_prune_model_interrupted")
+        print("✅ Model saved to outputs/ppo_quantum_prune_model_interrupted.zip")
 
     os.makedirs("outputs", exist_ok=True)
     model.save("outputs/ppo_quantum_prune_model")
@@ -1158,3 +1193,4 @@ if __name__ == '__main__':
 ## CALL MODEL AFTER RUN
 # from stable_baselines3 import PPO
 # model = PPO.load("outputs/ppo_quantum_prune_model")
+# model = PPO.load("outputs/checkpoints/ppo_quantum_prune_50000_steps")
