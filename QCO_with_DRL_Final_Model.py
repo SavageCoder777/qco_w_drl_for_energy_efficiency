@@ -4,7 +4,7 @@
 #   training the DRL model--specifically PPO--to apply gate transformations reducing the
 #   depth/gate count/energy of the circuit while maintaining overall logic.
 # - Generative AI was used to help with part of this code; the 'check' emojis from the
-#   AI responses were liked by the researchers so incorporated into the final logs in
+#   AI responses were liked by the researchers and incorporated into the final logs in
 #   the code.
 #
 # Copyright 2025 UCSB SRA Track 7 Team 6
