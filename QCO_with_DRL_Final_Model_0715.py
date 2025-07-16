@@ -458,7 +458,7 @@ class QuantumPruneEnv(gym.Env):
         super().__init__()
         self.original_circuit = base_circuit
         self.circuit = base_circuit.copy()
-        self.action_space = spaces.Discrete(3)  # merge, cancel, commute, ZX
+        self.action_space = spaces.Discrete(4)  # merge, cancel, commute, ZX
         self.observation_space = spaces.Box(low=0, high=1, shape=(11,), dtype=np.float32)
         self.max_steps = MAX_TEST_STEPS
         self.steps_taken = 0
