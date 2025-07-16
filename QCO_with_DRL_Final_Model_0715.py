@@ -251,108 +251,56 @@ def remove_overlapping(ops_list):
             used_qubits.update(op.qubits)
     return filtered_ops
 
-def spacer_around_CNOT(circuit: cirq.Circuit) -> cirq.Circuit:
-# Verified. See code_verification\apply_commutation.ipynb for test cases.
-    """
-    This function is a helper function for apply_commutation.
-
-    This function first adds a identity gate around the CNOT gate along the target qubit to spread the 
-    CNOT gates apart from the rest. Then the identity gates are swapped in the direction away from the 
-    CNOT gates with a single qubit gate.
-    """
-    moments = list(circuit)
-    # spread
+def isolate_first_gate_after_cnot(moments):
+    new_moments = moments[:]
     i = 0
-    while i < len(moments):
-        moment = moments[i]
+    while i < len(new_moments):
+        moment = new_moments[i]
         cnot_ops = [op for op in moment.operations if isinstance(op.gate, cirq.CNotPowGate)]
         for cnot in cnot_ops:
-            q0, q1 = cnot.qubits
-            if i > 0:
-                left = moments[i - 1]
-                if q0 in left.qubits and q1 in left.qubits:
-                    moments.insert(i, cirq.Moment([cirq.I(q1)]))
-                    i += 1
+            cnot_qubits = set(cnot.qubits)
+            j = i + 1
+            while j < len(new_moments):
+                next_moment = new_moments[j]
+                overlapping_ops = [op for op in next_moment.operations if not set(op.qubits).isdisjoint(cnot_qubits)]
+                if overlapping_ops:
+                    op_to_isolate = overlapping_ops[0]
+                    if len(next_moment.operations) > 1:
+                        remaining_ops = [op for op in next_moment.operations if op != op_to_isolate]
+                        new_moments[j] = cirq.Moment(remaining_ops)
+                        new_moments.insert(j, cirq.Moment([op_to_isolate]))
                     break
-            if i + 1 < len(moments):
-                right = moments[i + 1]
-                if q0 in right.qubits and q1 in right.qubits:
-                    moments.insert(i + 1, cirq.Moment([cirq.I(q1)]))
-                    break
+                j += 1
         i += 1
-    
-    circuit = cirq.Circuit(moments)
+    return new_moments
 
-    # shift
-    new_moments = list(circuit)
-    num_moments = len(new_moments)
+def qubits_overlap(ops):
+    seen = set()
+    for op in ops:
+        for q in op.qubits:
+            if q in seen:
+                return True
+            seen.add(q)
+    return False
 
-    shifted_ids = set()  # (moment index, qubit tuple)
-
-    for i in range(num_moments):
-        moment = new_moments[i]
-        ops = list(moment.operations)
-
-        for op_idx, op in enumerate(ops):
-            if isinstance(op.gate, cirq.IdentityGate):
-                id_key = (i, tuple(op.qubits))
-                if id_key in shifted_ids:
-                    continue
-
-                id_qubits = set(op.qubits)
-
-                # try swap with i+1 moment
-                if i + 1 < num_moments:
-                    next_ops = list(new_moments[i + 1].operations)
-                    for j, next_op in enumerate(next_ops):
-                        if not isinstance(next_op.gate, cirq.CNotPowGate) and set(next_op.qubits) == id_qubits:
-                            ops[op_idx], next_ops[j] = next_ops[j], ops[op_idx]
-                            new_moments[i] = cirq.Moment(ops)
-                            new_moments[i + 1] = cirq.Moment(next_ops)
-                            shifted_ids.discard((i, tuple(op.qubits)))
-                            shifted_ids.add((i + 1, tuple(op.qubits)))  # mark new location
-                            break
-
-                # try swap with i-1 moment
-                elif i - 1 >= 0:
-                    prev_ops = list(new_moments[i - 1].operations)
-                    for j, prev_op in enumerate(prev_ops):
-                        if not isinstance(prev_op.gate, cirq.CNotPowGate) and set(prev_op.qubits) == id_qubits:
-                            ops[op_idx], prev_ops[j] = prev_ops[j], ops[op_idx]
-                            new_moments[i] = cirq.Moment(ops)
-                            new_moments[i - 1] = cirq.Moment(prev_ops)
-                            shifted_ids.discard((i, tuple(op.qubits)))
-                            shifted_ids.add((i - 1, tuple(op.qubits)))
-                            break
-    return cirq.Circuit(new_moments)
-
-# Commutes gates that satisfy AB=BA, where A and B are unitary operators
 def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
-# Verified and debugged. See code_verification\apply_commutation.ipynb for test cases.
-    """
-    This function applies commutation by first applyings spacers around the CNOT gates, 
-    swapping the gates, then removing the identity spacers. The addition of Identity spacers
-    around the CNOT is because CNOT is a multi-qubit gate and may overlap with other single 
-    qubit gates. As a result, the swaps that occur may not be apparent because it was swapped 
-    with an Identity gate, which is later removed.
-    """
-    # Add spacers around CNOT gate
-    circuit = spacer_around_CNOT(circuit)
-
-    # swap/commutation
     moments = list(circuit)
 
+    # Step 1: isolate first gate after each CNOT
+    moments = isolate_first_gate_after_cnot(moments)
+
+    # Step 2: single pass over adjacent moments to swap commuting ops
     i = 0
     while i < len(moments) - 1:
-        m1, m2 = moments[i], moments[i + 1]
-        m1_ops = list(m1.operations)
-        m2_ops = list(m2.operations)
+        m1_ops = list(moments[i].operations)
+        m2_ops = list(moments[i + 1].operations)
 
         to_move_to_m2 = []
         to_move_to_m1 = []
 
         for op1 in m1_ops:
             for op2 in m2_ops:
+                # Commute and overlapping qubits => candidates for swapping
                 if cirq.commutes(op1, op2, atol=1e-10) and (not set(op1.qubits).isdisjoint(op2.qubits)):
                     to_move_to_m2.append(op1)
                     to_move_to_m1.append(op2)
@@ -361,36 +309,13 @@ def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
         new_m1_ops = [op for op in m1_ops if op not in to_move_to_m2] + to_move_to_m1
         new_m2_ops = [op for op in m2_ops if op not in to_move_to_m1] + to_move_to_m2
 
-        def qubits_overlap(ops):
-            qubits_seen = set()
-            for op in ops:
-                for q in op.qubits:
-                    if q in qubits_seen:
-                        return True
-                    qubits_seen.add(q)
-            return False
-
-        # Before setting moments[i] and moments[i+1]:
         if not qubits_overlap(new_m1_ops) and not qubits_overlap(new_m2_ops):
             moments[i] = cirq.Moment(new_m1_ops)
             moments[i + 1] = cirq.Moment(new_m2_ops)
-        else:
-            # Skip swap or handle differently (e.g., don't swap)
-            pass
-
 
         i += 1
-    circuit = cirq.Circuit(moments)
 
-    # remove the identity spacers
-    ops_in_order = []
-
-    for moment in circuit:
-        for op in moment.operations:
-            if not isinstance(op.gate, cirq.IdentityGate):
-                ops_in_order.append(op)
-                
-    return cirq.Circuit(ops_in_order)
+    return cirq.Circuit(moments)
 
 
 # ---------------------------------
@@ -533,7 +458,7 @@ class QuantumPruneEnv(gym.Env):
         super().__init__()
         self.original_circuit = base_circuit
         self.circuit = base_circuit.copy()
-        self.action_space = spaces.Discrete(4)  # merge, cancel, commute, ZX
+        self.action_space = spaces.Discrete(3)  # merge, cancel, commute, ZX
         self.observation_space = spaces.Box(low=0, high=1, shape=(11,), dtype=np.float32)
         self.max_steps = MAX_TEST_STEPS
         self.steps_taken = 0
@@ -565,6 +490,11 @@ class QuantumPruneEnv(gym.Env):
         if self.r < 1:
             self.r = 1
 
+        print(action)
+        out1 = cirq_counts_faster(self.original_circuit, 100000)
+        out2 = cirq_counts_faster(self.circuit, 100000)
+        print(hellinger_fidelity(out1, out2))
+
         after = evaluate_circuit(self, self.circuit)
         self._update_metrics()
         depth_delta = before['depth'] - after['depth']
@@ -572,7 +502,7 @@ class QuantumPruneEnv(gym.Env):
         energy_delta = (before['energy'] - after['energy'])
 
         # Reward Calculation
-        self.r, fidelity = _adjust_r_based_on_fidelity(self.circuit)
+        self.r, fidelity = _adjust_r_based_on_fidelity(self.circuit, self.baseline_counts)
         reward = energy_delta * 1E-7 # scaled for stability
 
         if after['gate_count'] == 0: reward = -10
