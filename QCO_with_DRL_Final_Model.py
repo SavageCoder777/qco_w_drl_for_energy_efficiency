@@ -7,7 +7,6 @@
 #   AI responses were liked by the researchers and incorporated into the final logs in
 #   the code.
 #
-# Copyright 2025 UCSB SRA Track 7 Team 6
 
 # Initial necessary imports; find required libraries in requirements.txt
 import cirq

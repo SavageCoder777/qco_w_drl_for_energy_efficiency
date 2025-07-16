@@ -7,7 +7,6 @@
 #   AI responses were liked by the researchers and incorporated into the final logs in
 #   the code.
 #
-# Copyright 2025 UCSB SRA Track 7 Team 6
 
 # Initial necessary imports; find required libraries in requirements.txt
 import cirq
@@ -42,8 +41,8 @@ MAX_QUBITS = 2
 MAX_DEPTH = 150
 MAX_GATES = MAX_QUBITS * MAX_DEPTH
 MAX_TEST_STEPS = 20
-MAX_TRAIN_STEPS = 1000 #350_000 # time steps the model takes during training
-MAX_TRAIN_CIRCUITS = 100 #17_500 # how many circuits to be created and train the model on
+MAX_TRAIN_STEPS = 350_000 # time steps the model takes during training
+MAX_TRAIN_CIRCUITS = 17_500 # how many circuits to be created and train the model on
 MAX_TEST_CIRCUITS = 500 # how many circuits the trained model optimizes
 P_SYSTEM = 15_000 # specific for superconducting quantum computer
 W_FREQUENCY = 83_333_333.33 # specific for superconducting quantum computer
@@ -322,78 +321,78 @@ def apply_commutation(circuit: cirq.Circuit) -> cirq.Circuit:
 # 3.5. ZX-CALCULUS TRANSFORMATIONS
 # ---------------------------------
 
-# Converts cirq.Circuit to a QuantumCircuit
-def circuit_from_cirq(circuit: cirq.Circuit) -> zx.Circuit:
-    zx_circ = zx.Circuit(MAX_QUBITS)
-    for moment in circuit:
-        for op in moment:
-            gate = op.gate
-            q = [q.x for q in op.qubits]
-            if isinstance(gate, cirq.HPowGate) and np.isclose(gate.exponent, 1):
-                zx_circ.add_gate("H", q[0])
-            elif isinstance(gate, cirq.XPowGate):
-                zx_circ.add_gate("XPhase", q[0], phase=Fraction(gate.exponent).limit_denominator(1000))
-            elif isinstance(gate, cirq.YPowGate):
-                pass  # PyZX does not support Y rotations directly
-            elif isinstance(gate, cirq.CNotPowGate) and np.isclose(gate.exponent, 1):
-                zx_circ.add_gate("CNOT", q[0], q[1])
-    return zx_circ
+# # Converts cirq.Circuit to a QuantumCircuit
+# def circuit_from_cirq(circuit: cirq.Circuit) -> zx.Circuit:
+#     zx_circ = zx.Circuit(MAX_QUBITS)
+#     for moment in circuit:
+#         for op in moment:
+#             gate = op.gate
+#             q = [q.x for q in op.qubits]
+#             if isinstance(gate, cirq.HPowGate) and np.isclose(gate.exponent, 1):
+#                 zx_circ.add_gate("H", q[0])
+#             elif isinstance(gate, cirq.XPowGate):
+#                 zx_circ.add_gate("XPhase", q[0], phase=Fraction(gate.exponent).limit_denominator(1000))
+#             elif isinstance(gate, cirq.YPowGate):
+#                 pass  # PyZX does not support Y rotations directly
+#             elif isinstance(gate, cirq.CNotPowGate) and np.isclose(gate.exponent, 1):
+#                 zx_circ.add_gate("CNOT", q[0], q[1])
+#     return zx_circ
 
-# Converts QuantumCircuit to a cirq.Circuit
-def pyzx_to_cirq(pyzx_circuit):
-    ops = []
-    def get_qubits_used():
-        max_index = 0
-        for gate in pyzx_circuit.gates:
-            targets = []
-            if hasattr(gate, 'target'):
-                t = gate.target
-                if isinstance(t, (list, tuple)):
-                    targets.extend(t)
-                else:
-                    targets.append(t)
-            if hasattr(gate, 'control'):
-                targets.append(gate.control)
-            if targets:
-                max_index = max(max_index, max(targets))
-        return max_index + 1
-    num_qubits = pyzx_circuit.n_qubits if hasattr(pyzx_circuit, 'n_qubits') else get_qubits_used()
-    cirq_qubits = [cirq.LineQubit(i) for i in range(num_qubits)]
-    for gate in pyzx_circuit.gates:
-        name = gate.name.upper()
-        if name == "ZPHASE":
-            q = gate.target if isinstance(gate.target, int) else gate.target[0]
-            ops.append(cirq.rz(gate.phase).on(cirq_qubits[q]))
-        elif name == "XPHASE":
-            q = gate.target if isinstance(gate.target, int) else gate.target[0]
-            ops.append(cirq.rx(gate.phase).on(cirq_qubits[q]))
-        elif name == "HAD":
-            q = gate.target if isinstance(gate.target, int) else gate.target[0]
-            ops.append(cirq.H(cirq_qubits[q]))
-        elif name == "CNOT":
-            ctrl = gate.control
-            tgt = gate.target if isinstance(gate.target, int) else gate.target[0]
-            ops.append(cirq.CNOT(cirq_qubits[ctrl], cirq_qubits[tgt]))
-        elif name == "CZ":
-            ctrl = gate.control
-            tgt = gate.target if isinstance(gate.target, int) else gate.target[0]
-            ops.append(cirq.CZ(cirq_qubits[ctrl], cirq_qubits[tgt]))
-        else:
-            pass
-    return cirq.Circuit(ops)
+# # Converts QuantumCircuit to a cirq.Circuit
+# def pyzx_to_cirq(pyzx_circuit):
+#     ops = []
+#     def get_qubits_used():
+#         max_index = 0
+#         for gate in pyzx_circuit.gates:
+#             targets = []
+#             if hasattr(gate, 'target'):
+#                 t = gate.target
+#                 if isinstance(t, (list, tuple)):
+#                     targets.extend(t)
+#                 else:
+#                     targets.append(t)
+#             if hasattr(gate, 'control'):
+#                 targets.append(gate.control)
+#             if targets:
+#                 max_index = max(max_index, max(targets))
+#         return max_index + 1
+#     num_qubits = pyzx_circuit.n_qubits if hasattr(pyzx_circuit, 'n_qubits') else get_qubits_used()
+#     cirq_qubits = [cirq.LineQubit(i) for i in range(num_qubits)]
+#     for gate in pyzx_circuit.gates:
+#         name = gate.name.upper()
+#         if name == "ZPHASE":
+#             q = gate.target if isinstance(gate.target, int) else gate.target[0]
+#             ops.append(cirq.rz(gate.phase).on(cirq_qubits[q]))
+#         elif name == "XPHASE":
+#             q = gate.target if isinstance(gate.target, int) else gate.target[0]
+#             ops.append(cirq.rx(gate.phase).on(cirq_qubits[q]))
+#         elif name == "HAD":
+#             q = gate.target if isinstance(gate.target, int) else gate.target[0]
+#             ops.append(cirq.H(cirq_qubits[q]))
+#         elif name == "CNOT":
+#             ctrl = gate.control
+#             tgt = gate.target if isinstance(gate.target, int) else gate.target[0]
+#             ops.append(cirq.CNOT(cirq_qubits[ctrl], cirq_qubits[tgt]))
+#         elif name == "CZ":
+#             ctrl = gate.control
+#             tgt = gate.target if isinstance(gate.target, int) else gate.target[0]
+#             ops.append(cirq.CZ(cirq_qubits[ctrl], cirq_qubits[tgt]))
+#         else:
+#             pass
+#     return cirq.Circuit(ops)
 
-# Uses built in ZX-Calculus simplification function to act as another action to optimize the circuit
-def apply_zx_simplification(circuit: cirq.Circuit) -> cirq.Circuit:
-    zx_circ = circuit_from_cirq(circuit)
-    g = zx_circ.to_graph()
-    simplify.match_w_fusion_parallel(g)  # fuse some gates
-    matches = simplify.match_ids(g)      # find identity pairs
-    simplify.remove_ids(g, matches)      # remove them
-    simplified = extract.extract_circuit(g)
-    cirq_circ = pyzx_to_cirq(simplified)
-    if len(list(cirq_circ.all_operations())) == 0:
-        return circuit  # fallback if too much was removed
-    return cirq_circ
+# # Uses built in ZX-Calculus simplification function to act as another action to optimize the circuit
+# def apply_zx_simplification(circuit: cirq.Circuit) -> cirq.Circuit:
+#     zx_circ = circuit_from_cirq(circuit)
+#     g = zx_circ.to_graph()
+#     simplify.match_w_fusion_parallel(g)  # fuse some gates
+#     matches = simplify.match_ids(g)      # find identity pairs
+#     simplify.remove_ids(g, matches)      # remove them
+#     simplified = extract.extract_circuit(g)
+#     cirq_circ = pyzx_to_cirq(simplified)
+#     if len(list(cirq_circ.all_operations())) == 0:
+#         return circuit  # fallback if too much was removed
+#     return cirq_circ
 
 # -------------------------
 # 3.75. HELLINGER FIDELITY
@@ -458,7 +457,7 @@ class QuantumPruneEnv(gym.Env):
         super().__init__()
         self.original_circuit = base_circuit
         self.circuit = base_circuit.copy()
-        self.action_space = spaces.Discrete(4)  # merge, cancel, commute, ZX
+        self.action_space = spaces.Discrete(4)  # merge, cancel, commute, remove negligible gates
         self.observation_space = spaces.Box(low=0, high=1, shape=(11,), dtype=np.float32)
         self.max_steps = MAX_TEST_STEPS
         self.steps_taken = 0
@@ -485,7 +484,7 @@ class QuantumPruneEnv(gym.Env):
         elif action == 2:
             self.circuit = apply_commutation(self.circuit)
         elif action == 3:
-            self.circuit = apply_zx_simplification(self.circuit)
+            self.circuit = cirq.drop_negligible_operations(self.circuit, tolerance=1E-8)
 
         if self.r < 1:
             self.r = 1
