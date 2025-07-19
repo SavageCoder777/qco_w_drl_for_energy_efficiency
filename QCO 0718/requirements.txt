@@ -1,0 +1,12 @@
+cirq
+fraction
+gymnasium
+logging
+matplotlib
+numpy
+pandas
+pyzx
+scipy
+seaborn
+stable-baselines3
+qsimcirq
